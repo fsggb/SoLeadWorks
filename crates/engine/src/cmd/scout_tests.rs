@@ -336,3 +336,64 @@ fn shaping_a_placed_pole_changes_its_volume_as_it_should() {
     let pointed = vol(&mut s, "R");
     assert!(pointed < half && pointed > half * 0.8, "{half} → {pointed}");
 }
+
+fn deux_supports(s: &mut Session) -> (String, String) {
+    let a = run(s, "scout.piece.traverse", json!({"diameter": 60, "length": 800, "at": [0, 0, 500], "dir": [1, 0, 0], "name": "Support A"}));
+    let b = run(s, "scout.piece.traverse", json!({"diameter": 60, "length": 800, "at": [0, 400, 500], "dir": [1, 0, 0], "name": "Support B"}));
+    (a["name"].as_str().unwrap_or_default().to_string(), b["name"].as_str().unwrap_or_default().to_string())
+}
+
+#[test]
+fn le_clayonnage_tresse_ses_claies_et_se_modifie_apres_coup() {
+    let mut s = Session::default();
+    let (a, b) = deux_supports(&mut s);
+    let r = run(&mut s, "scout.clayonnage", json!({"supports": [a, b], "pas": 60}));
+    assert_eq!(r["traverse_fine"], true, "deux supports : la traverse fine du milieu est ajoutée");
+    let n = r["claies"].as_u64().unwrap_or(0);
+    assert!((12..=14).contains(&n), "780 mm au pas de 60 : {n} claies");
+    // une claie = un seul corps, un tube le long d'une spline
+    let inspect = run(&mut s, "document.inspect", json!({}));
+    let claies = inspect["bodies"].as_array().map_or(0, |b| b.iter().filter(|x| x["name"].as_str().is_some_and(|n| n.starts_with("Claie"))).count());
+    assert_eq!(claies as u64, n, "{inspect}");
+    // les claies passent au-dessus et au-dessous des supports : la hauteur dépasse le support des deux côtés
+    let h = size_of(&s, "Clayonnage")[2];
+    assert!(h > 60.0 + 2.0 * 20.0 - 1.0, "épaisseur du clayonnage {h}");
+    // Modifier : refait avec un autre pas, sous le même nom, sans laisser l'ancien
+    let m = run(&mut s, "scout.clayonnage", json!({"modifier": r["component"], "pas": 40}));
+    assert_eq!(m["name"], r["name"]);
+    assert!(m["claies"].as_u64().unwrap_or(0) > n, "pas plus serré : plus de claies");
+    assert_eq!(s.doc.components.iter().filter(|c| c.name == r["name"]).count(), 1);
+    assert!(s.execute("edit.undo", &json!({})).is_ok(), "la modification s'annule d'un coup");
+}
+
+#[test]
+fn le_ph_tend_ses_cordes_et_se_modifie() {
+    let mut s = Session::default();
+    let a = run(&mut s, "scout.piece.traverse", json!({"diameter": 60, "length": 1000, "at": [0, 0, 30], "dir": [1, 0, 0], "name": "PH A"}));
+    let b = run(&mut s, "scout.piece.traverse", json!({"diameter": 60, "length": 1000, "at": [0, 0, 90], "dir": [0, 0, 1], "name": "PH B"}));
+    let (na, nb) = (a["name"].as_str().unwrap_or_default().to_string(), b["name"].as_str().unwrap_or_default().to_string());
+    let r = run(&mut s, "scout.ph", json!({"a": na, "b": nb, "n": 12}));
+    assert_eq!(r["cordes"], 12);
+    let m = run(&mut s, "scout.ph", json!({"modifier": r["component"], "n": 20}));
+    assert_eq!(m["cordes"], 20);
+    assert!(s.execute("scout.ph", &json!({"a": na, "b": na})).is_err(), "la même traverse deux fois");
+    assert!(s.execute("scout.clayonnage", &json!({"supports": [na]})).is_err(), "un seul support");
+    assert!(s.execute("scout.clayonnage", &json!({"supports": [na, nb], "d": -3})).is_err(), "diamètre négatif");
+}
+
+#[test]
+fn les_plateaux_dans_des_quarts_de_bois_et_les_planches_chevillees() {
+    let mut s = Session::default();
+    let (a, b) = deux_supports(&mut s);
+    let v0 = volume_of(&mut s, &a);
+    let r = run(&mut s, "scout.plateau", json!({"a": a, "b": b, "garniture": "planches", "debut": 100, "fin": 100}));
+    assert_eq!(r["elements"], 5, "600 mm de planches de 100 mm avec 3 mm de jeu");
+    assert_eq!(r["chevilles"], 10, "deux chevilles par planche");
+    assert!(volume_of(&mut s, &a) < v0, "le quart de bois et les trous enlèvent du bois au support");
+    // les tables : claies dans des quarts de bois, et planches de rondins fendus
+    for mode in [1, 3] {
+        let mut t = Session::default();
+        let r = run(&mut t, "scout.meuble.create", json!({"type": "table", "mode": mode}));
+        assert!(r["poles"].as_u64().unwrap_or(0) > 10, "table mode {mode} : {r}");
+    }
+}

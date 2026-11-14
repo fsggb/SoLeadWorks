@@ -29,7 +29,12 @@ const fn tick(key: &'static str, label: &'static str, default: f64) -> ParamDef 
 
 const TEN: ParamDef = pick("ten", "Tenons", 0.0, &["Tenons à la hachette", "Tenons sciés"]);
 const TEN_SCIE: ParamDef = pick("ten", "Tenons", 1.0, &["Tenons à la hachette", "Tenons sciés"]);
-const ASM: ParamDef = pick("asm", "Assemblage du cadre", 0.0, &["Optimisé : mi-bois dans le cadre, tenons aux pieds", "Tenons uniquement", "Mi-bois dans le cadre (chevillé par les pieds)"]);
+const ASM: ParamDef = pick(
+    "asm",
+    "Assemblage du cadre",
+    0.0,
+    &["Optimisé : mi-bois dans le cadre, tenons aux pieds", "Tenons uniquement", "Mi-bois dans le cadre (chevillé par les pieds)"],
+);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Model {
@@ -46,77 +51,178 @@ pub const MODELS: &[Model] = &[
         name: "Établi de camp",
         category: "Outils et ateliers",
         summary: "Deux perches inclinées tenues par une cheville, deux pieds en A et une pédale.",
-        params: &[TEN, num("L", "Longueur des perches du corps (mm)", 2500.0), num("dP", "Diamètre des perches (mm)", 100.0), num("dPed", "Diamètre de la pédale (mm)", 60.0), num("ang", "Inclinaison du corps (°)", 20.0), num("ecart", "Écartement des pieds au sol (mm)", 1000.0)],
+        params: &[
+            TEN,
+            num("L", "Longueur des perches du corps (mm)", 2500.0),
+            num("dP", "Diamètre des perches (mm)", 100.0),
+            num("dPed", "Diamètre de la pédale (mm)", 60.0),
+            num("ang", "Inclinaison du corps (°)", 20.0),
+            num("ecart", "Écartement des pieds au sol (mm)", 1000.0),
+        ],
     },
     Model {
         id: "banc",
         name: "Banc court",
         category: "Assises",
         summary: "Un gros rondin posé sur quatre pieds tenonnés.",
-        params: &[TEN, num("L", "Longueur du banc (mm)", 1500.0), num("dL", "Diamètre du rondin (mm, 200 au maximum)", 200.0), num("h", "Hauteur de l’assise (mm)", 450.0), tick("fendu", "Rondin fendu en deux (assise plate)", 1.0)],
+        params: &[
+            TEN,
+            num("L", "Longueur du banc (mm)", 1500.0),
+            num("dL", "Diamètre du rondin (mm, 200 au maximum)", 200.0),
+            num("h", "Hauteur de l’assise (mm)", 450.0),
+            tick("fendu", "Rondin fendu en deux (assise plate)", 1.0),
+        ],
     },
     Model {
         id: "fauteuil",
         name: "Fauteuil carré",
         category: "Assises",
         summary: "Quatre pieds, un cadre d'assise, des claies et un dossier.",
-        params: &[TEN, num("larg", "Largeur d’assise (mm)", 650.0), num("prof", "Profondeur d’assise (mm)", 500.0), num("hs", "Hauteur de l’assise (mm)", 400.0), num("hd", "Hauteur totale du dossier (mm)", 900.0)],
+        params: &[
+            TEN,
+            num("larg", "Largeur d’assise (mm)", 650.0),
+            num("prof", "Profondeur d’assise (mm)", 500.0),
+            num("hs", "Hauteur de l’assise (mm)", 400.0),
+            num("hd", "Hauteur totale du dossier (mm)", 900.0),
+        ],
     },
     Model {
         id: "bancdos",
         name: "Banc à dossier",
         category: "Assises",
         summary: "Assise en rondins fendus, montants arrière inclinés, dossier en rondin fendu.",
-        params: &[TEN_SCIE, num("L", "Longueur du banc (mm)", 1400.0), num("hs", "Hauteur d’assise (mm)", 440.0), num("prof", "Profondeur d’assise (mm)", 420.0), num("Ht", "Hauteur du dossier (mm)", 850.0), num("ang", "Inclinaison des montants arrière (°)", 12.0), num("dP", "Diamètre des pieds et montants (mm)", 70.0), num("dS", "Diamètre des rondins d’assise (mm, fendus en deux)", 180.0), num("dd", "Diamètre du rondin du dossier (mm, fendu en deux)", 140.0)],
+        params: &[
+            TEN_SCIE,
+            num("L", "Longueur du banc (mm)", 1400.0),
+            num("hs", "Hauteur d’assise (mm)", 440.0),
+            num("prof", "Profondeur d’assise (mm)", 420.0),
+            num("Ht", "Hauteur du dossier (mm)", 850.0),
+            num("ang", "Inclinaison des montants arrière (°)", 12.0),
+            num("dP", "Diamètre des pieds et montants (mm)", 70.0),
+            num("dS", "Diamètre des rondins d’assise (mm, fendus en deux)", 180.0),
+            num("dd", "Diamètre du rondin du dossier (mm, fendu en deux)", 140.0),
+        ],
     },
     Model {
         id: "bancdiag",
         name: "Banc à dossier (diagonales)",
         category: "Assises",
         summary: "Les diagonales font le pied et le dossier ; l'assise les traverse.",
-        params: &[TEN_SCIE, num("L", "Longueur du banc (mm)", 1400.0), num("hs", "Hauteur d’assise (mm)", 440.0), num("Ht", "Hauteur du dossier (mm)", 900.0), num("ang", "Inclinaison des diagonales depuis la verticale (°)", 25.0), num("angJ", "Inclinaison des jambes arrière (°)", 15.0), num("dD", "Diamètre des diagonales (mm)", 70.0), num("dS", "Diamètre du rondin d’assise (mm)", 180.0), num("dd", "Diamètre du rondin du dossier (mm, fendu en deux)", 140.0)],
+        params: &[
+            TEN_SCIE,
+            num("L", "Longueur du banc (mm)", 1400.0),
+            num("hs", "Hauteur d’assise (mm)", 440.0),
+            num("Ht", "Hauteur du dossier (mm)", 900.0),
+            num("ang", "Inclinaison des diagonales depuis la verticale (°)", 25.0),
+            num("angJ", "Inclinaison des jambes arrière (°)", 15.0),
+            num("dD", "Diamètre des diagonales (mm)", 70.0),
+            num("dS", "Diamètre du rondin d’assise (mm)", 180.0),
+            num("dd", "Diamètre du rondin du dossier (mm, fendu en deux)", 140.0),
+        ],
     },
     Model {
         id: "table",
         name: "Table à pieds en X",
         category: "Tables et plans de travail",
         summary: "Deux paires de pieds croisés en mi-bois, deux lisses et un plateau de claies.",
-        params: &[TEN_SCIE, num("long", "Longueur du plateau (mm)", 1800.0), num("larg", "Largeur du plateau (mm)", 800.0), num("h", "Hauteur du dessus du plateau (mm)", 750.0), pick("mode", "Plateau", 0.0, &["Claies tressées (sous, sur, sous)", "Claies droites dans des quarts de bois", "Filet de ficelle (maille serrée)"]), num("maille", "Maille du filet (mm)", 30.0), num("dc", "Diamètre des claies (mm)", 20.0)],
+        params: &[
+            TEN_SCIE,
+            num("long", "Longueur du plateau (mm)", 1800.0),
+            num("larg", "Largeur du plateau (mm)", 800.0),
+            num("h", "Hauteur du dessus du plateau (mm)", 750.0),
+            pick(
+                "mode",
+                "Plateau",
+                0.0,
+                &[
+                    "Claies tressées (sous, sur, sous)",
+                    "Claies droites dans des quarts de bois",
+                    "Filet de ficelle (maille serrée)",
+                    "Planches de rondins fendus, chevillées",
+                ],
+            ),
+            num("maille", "Maille du filet (mm)", 30.0),
+            num("dc", "Diamètre des claies (mm)", 20.0),
+        ],
     },
     Model {
         id: "prepa",
         name: "Table de prépa",
         category: "Tables et plans de travail",
         summary: "Quatre pieds, un cadre, un dessus de rondins fendus et un dessous de claies.",
-        params: &[TEN_SCIE, ASM, num("long", "Longueur du plateau (mm)", 1600.0), num("larg", "Largeur du plateau (mm)", 700.0), num("h", "Hauteur du plan de travail (mm), 900 = standard cuisine", 900.0), num("dr", "Diamètre des rondins fendus du dessus (mm)", 70.0), num("dc", "Diamètre des claies du dessous (mm)", 20.0), tick("bas", "Dessous en claies", 1.0)],
+        params: &[
+            TEN_SCIE,
+            ASM,
+            num("long", "Longueur du plateau (mm)", 1600.0),
+            num("larg", "Largeur du plateau (mm)", 700.0),
+            num("h", "Hauteur du plan de travail (mm), 900 = standard cuisine", 900.0),
+            num("dr", "Diamètre des rondins fendus du dessus (mm)", 70.0),
+            num("dc", "Diamètre des claies du dessous (mm)", 20.0),
+            tick("bas", "Dessous en claies", 1.0),
+        ],
     },
     Model {
         id: "cuisine",
         name: "Table de prépa avec étagère",
         category: "Tables et plans de travail",
         summary: "La table de prépa et, à côté, une colonne étagère.",
-        params: &[TEN_SCIE, ASM, num("long", "Longueur du plan de travail (mm)", 1800.0), num("larg", "Profondeur du plan et de la colonne (mm)", 700.0), num("lc", "Largeur de la colonne étagère (mm)", 600.0), num("h", "Hauteur du plan de travail (mm), 900 = standard cuisine", 900.0), num("ht", "Hauteur de la colonne étagère (mm), ≈ 2× le plan", 1800.0), pick("cote", "Colonne étagère", 0.0, &["À droite du plan de travail", "À gauche du plan de travail"]), num("dr", "Diamètre des rondins fendus du dessus (mm)", 70.0), num("dc", "Diamètre des claies (mm)", 20.0)],
+        params: &[
+            TEN_SCIE,
+            ASM,
+            num("long", "Longueur du plan de travail (mm)", 1800.0),
+            num("larg", "Profondeur du plan et de la colonne (mm)", 700.0),
+            num("lc", "Largeur de la colonne étagère (mm)", 600.0),
+            num("h", "Hauteur du plan de travail (mm), 900 = standard cuisine", 900.0),
+            num("ht", "Hauteur de la colonne étagère (mm), ≈ 2× le plan", 1800.0),
+            pick("cote", "Colonne étagère", 0.0, &["À droite du plan de travail", "À gauche du plan de travail"]),
+            num("dr", "Diamètre des rondins fendus du dessus (mm)", 70.0),
+            num("dc", "Diamètre des claies (mm)", 20.0),
+        ],
     },
     Model {
         id: "etagere",
         name: "Étagère",
         category: "Rangements",
         summary: "Quatre montants et trois étagères : claies, claies, filet.",
-        params: &[TEN_SCIE, ASM, num("long", "Longueur (mm)", 1000.0), num("larg", "Profondeur (mm)", 500.0), num("h", "Hauteur totale (mm)", 1600.0), num("h1", "Hauteur de l’étagère basse, claies tressées (mm)", 400.0), num("h2", "Hauteur de l’étagère médiane, quart de bois (mm)", 900.0), num("dc", "Diamètre des claies (mm)", 20.0), num("maille", "Maille du filet du haut (mm)", 30.0)],
+        params: &[
+            TEN_SCIE,
+            ASM,
+            num("long", "Longueur (mm)", 1000.0),
+            num("larg", "Profondeur (mm)", 500.0),
+            num("h", "Hauteur totale (mm)", 1600.0),
+            num("h1", "Hauteur de l’étagère basse, claies tressées (mm)", 400.0),
+            num("h2", "Hauteur de l’étagère médiane, quart de bois (mm)", 900.0),
+            num("dc", "Diamètre des claies (mm)", 20.0),
+            num("maille", "Maille du filet du haut (mm)", 30.0),
+        ],
     },
     Model {
         id: "vaisselier",
         name: "Vaisselier",
         category: "Rangements",
         summary: "Une petite table haute au plateau en filet, pour poser la bassine.",
-        params: &[TEN_SCIE, num("long", "Longueur du plateau (mm)", 900.0), num("larg", "Largeur du plateau (mm), à ajuster à la bassine", 380.0), num("h", "Hauteur du dessus (mm)", 750.0), num("maille", "Maille du filet (mm)", 30.0)],
+        params: &[
+            TEN_SCIE,
+            num("long", "Longueur du plateau (mm)", 900.0),
+            num("larg", "Largeur du plateau (mm), à ajuster à la bassine", 380.0),
+            num("h", "Hauteur du dessus (mm)", 750.0),
+            num("maille", "Maille du filet (mm)", 30.0),
+        ],
     },
     Model {
         id: "feu",
         name: "Table à feu",
         category: "Tables et plans de travail",
         summary: "Une table basse au plateau de planches.",
-        params: &[TEN_SCIE, ASM, num("long", "Longueur du plateau (mm)", 1000.0), num("larg", "Largeur du plateau (mm)", 800.0), num("h", "Hauteur du dessus (mm)", 700.0), num("ep", "Épaisseur des planches (mm)", 30.0), num("lp", "Largeur des planches (mm)", 100.0)],
+        params: &[
+            TEN_SCIE,
+            ASM,
+            num("long", "Longueur du plateau (mm)", 1000.0),
+            num("larg", "Largeur du plateau (mm)", 800.0),
+            num("h", "Hauteur du dessus (mm)", 700.0),
+            num("ep", "Épaisseur des planches (mm)", 30.0),
+            num("lp", "Largeur des planches (mm)", 100.0),
+        ],
     },
 ];
 
@@ -224,7 +330,16 @@ struct Frame {
     traverses: [usize; 2],
 }
 
-fn frame(b: &mut Build, ten: TenonOpts, asm: Asm, (x0, x1, y0, y1): (f64, f64, f64, f64), z: f64, legs: [usize; 4], dl: f64, dt: f64) -> Result<Frame, String> {
+fn frame(
+    b: &mut Build,
+    ten: TenonOpts,
+    asm: Asm,
+    (x0, x1, y0, y1): (f64, f64, f64, f64),
+    z: f64,
+    legs: [usize; 4],
+    dl: f64,
+    dt: f64,
+) -> Result<Frame, String> {
     let r = dl / 2.0;
     match asm {
         Asm::Tenons => {
@@ -491,6 +606,21 @@ fn table(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     // a thin central rail holds the legs apart
     match p.get("mode") as usize {
         2 => net(b, (dc, l - dc, ya, yb), ztop + dl / 2.0, p.get("maille")),
+        // dans des quarts de bois taillés dans les lisses (CathIA)
+        1 => {
+            let o = super::tissage::Plateau { d: dc, debut: xa + dl, fin: l - xb + dl, ..super::tissage::Plateau::default() };
+            super::tissage::plateau(b, l0, l1, &o)?;
+        }
+        3 => {
+            let o = super::tissage::Plateau {
+                garniture: super::tissage::Garniture::Planches,
+                jeu: 3.0,
+                debut: xa + dl,
+                fin: l - xb + dl,
+                ..super::tissage::Plateau::default()
+            };
+            super::tissage::plateau(b, l0, l1, &o)?;
+        }
         _ => claies(b, (0.0, l), (0.0, w), ztop + dl / 2.0, dc),
     }
     Ok(())
@@ -507,7 +637,13 @@ fn prepa(b: &mut Build, p: &Params, ten: TenonOpts, with_column: bool) -> Result
     let bx = (r, l - r, r, w - r);
     let tall = if with_column { p.get("ht") } else { zl };
     let right_tall = with_column && p.get("cote") == 0.0;
-    let hs = if right_tall { [zl, tall, zl, tall] } else if with_column { [tall, zl, tall, zl] } else { [zl; 4] };
+    let hs = if right_tall {
+        [zl, tall, zl, tall]
+    } else if with_column {
+        [tall, zl, tall, zl]
+    } else {
+        [zl; 4]
+    };
     let legs = legs4(b, dl, bx, hs);
     let f = frame(b, ten, asm, bx, zl, legs, dlis, dlis)?;
     half_logs(b, (0.0, l), (0.0, w), zl + dlis / 2.0, dr)?;
@@ -619,7 +755,19 @@ mod tests {
     #[test]
     fn the_eleven_models_of_cathia_are_all_there() {
         let names: Vec<&str> = MODELS.iter().map(|m| m.name).collect();
-        for n in ["Établi de camp", "Banc court", "Fauteuil carré", "Banc à dossier", "Banc à dossier (diagonales)", "Table à pieds en X", "Table de prépa", "Table de prépa avec étagère", "Étagère", "Vaisselier", "Table à feu"] {
+        for n in [
+            "Établi de camp",
+            "Banc court",
+            "Fauteuil carré",
+            "Banc à dossier",
+            "Banc à dossier (diagonales)",
+            "Table à pieds en X",
+            "Table de prépa",
+            "Table de prépa avec étagère",
+            "Étagère",
+            "Vaisselier",
+            "Table à feu",
+        ] {
             assert!(names.contains(&n), "{n}");
         }
         assert_eq!(MODELS.len(), 11);

@@ -154,7 +154,12 @@ impl SheetCfg {
             cotes_ensemble: true,
             cotes_pieces: false,
             tableau: true,
-            cartouche: Cartouche { titre: titre.to_string(), dessinateur: dessinateur.to_string(), materiau: "Bois rond".into(), ..Cartouche::default() },
+            cartouche: Cartouche {
+                titre: titre.to_string(),
+                dessinateur: dessinateur.to_string(),
+                materiau: "Bois rond".into(),
+                ..Cartouche::default()
+            },
         }
     }
 }
@@ -245,7 +250,10 @@ fn draw_view(prims: &mut Vec<Prim>, view: View, poles: &[Pole], [ox, oy]: P2, sc
             prims.push(Prim::Circle { c: [sx(a[0]), sy(a[1])], r: (r * scale).max(0.3), k });
         } else {
             let (nx, ny) = (-dy / l * r, dx / l * r);
-            let pts = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]].iter().map(|q| [sx(q[0]), sy(q[1])]).collect();
+            let pts = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]]
+                .iter()
+                .map(|q| [sx(q[0]), sy(q[1])])
+                .collect();
             prims.push(Prim::Poly { pts, k });
         }
     }
@@ -286,7 +294,14 @@ fn cartouche(prims: &mut Vec<Prim>, (w, h): (f64, f64), c: &Cartouche, den: f64,
     text(prims, [x + 3.0, y + 19.0], &format!("Dessiné par : {}", c.dessinateur), 3.2, Anchor::Start, Kind::Text);
     text(prims, [x + 3.0, y + 30.0], &format!("{} {}", c.societe, c.date), 3.2, Anchor::Start, Kind::Text);
     text(prims, [x + 93.0, y + 19.0], &format!("Échelle 1:{}   {:?}", mm(den), format), 3.2, Anchor::Start, Kind::Text);
-    text(prims, [x + 93.0, y + 30.0], &format!("Feuille {}/{}   Ind. {}", feuille.0, feuille.1, if c.indice.is_empty() { "A" } else { &c.indice }), 3.2, Anchor::Start, Kind::Text);
+    text(
+        prims,
+        [x + 93.0, y + 30.0],
+        &format!("Feuille {}/{}   Ind. {}", feuille.0, feuille.1, if c.indice.is_empty() { "A" } else { &c.indice }),
+        3.2,
+        Anchor::Start,
+        Kind::Text,
+    );
     if !c.materiau.is_empty() || !c.reference.is_empty() {
         text(prims, [x + 93.0, y + 8.0], &format!("{} {}", c.materiau, c.reference), 3.0, Anchor::Start, Kind::Text);
     }
@@ -307,7 +322,11 @@ fn tableau(prims: &mut Vec<Prim>, poles: &[Pole], x: f64, y: f64, max_rows: usiz
     hline(prims, [x, yy + 1.5], [x + 100.0, yy + 1.5], 0.25, Kind::Rule);
     yy += 5.5;
     for (i, r) in cut_list(poles).iter().take(max_rows).enumerate() {
-        let dim = if r.width > 0.0 { format!("{}×{}×{}", mm(r.diameter), mm(r.width), mm(r.length)) } else { format!("Ø{} × {}", mm(r.diameter), mm(r.length)) };
+        let dim = if r.width > 0.0 {
+            format!("{}×{}×{}", mm(r.diameter), mm(r.width), mm(r.length))
+        } else {
+            format!("Ø{} × {}", mm(r.diameter), mm(r.length))
+        };
         for (j, cell) in [format!("{}", i + 1), r.count.to_string(), r.role.clone(), dim].iter().enumerate() {
             text(prims, [x + cols[j], yy], cell, 3.0, Anchor::Start, Kind::Text);
         }
@@ -519,7 +538,16 @@ fn write_prim(o: &mut String, p: &Prim, bare: bool) {
     let _ = bare;
     match p {
         Prim::Line { a, b, w, k } => {
-            let _ = writeln!(o, "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" class=\"{}\" stroke-width=\"{:.2}\"/>", a[0], a[1], b[0], b[1], class(*k), w);
+            let _ = writeln!(
+                o,
+                "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" class=\"{}\" stroke-width=\"{:.2}\"/>",
+                a[0],
+                a[1],
+                b[0],
+                b[1],
+                class(*k),
+                w
+            );
         }
         Prim::Poly { pts, k } => {
             let list: Vec<String> = pts.iter().map(|q| format!("{:.2},{:.2}", q[0], q[1])).collect();
@@ -535,7 +563,15 @@ fn write_prim(o: &mut String, p: &Prim, bare: bool) {
                 Anchor::End => "end",
             };
             let tr = if *rot { format!(" transform=\"rotate(-90 {:.2} {:.2})\"", at[0], at[1]) } else { String::new() };
-            let _ = writeln!(o, "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" text-anchor=\"{a}\" class=\"{}\"{tr}>{}</text>", at[0], at[1], h, class(*k), esc(s));
+            let _ = writeln!(
+                o,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" text-anchor=\"{a}\" class=\"{}\"{tr}>{}</text>",
+                at[0],
+                at[1],
+                h,
+                class(*k),
+                esc(s)
+            );
         }
     }
 }
@@ -579,7 +615,9 @@ mod tests {
         let s = sheet(&poles, &cfg, (1, 1));
         let svg = svg(&s);
         assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
-        for needle in ["Vue de face", "Vue de dessus", "Vue isométrique", "Nomenclature", "Assemblages", "Dessiné par : Lou", "Banc &lt;1&gt; &amp; co", "1500"] {
+        for needle in
+            ["Vue de face", "Vue de dessus", "Vue isométrique", "Nomenclature", "Assemblages", "Dessiné par : Lou", "Banc &lt;1&gt; &amp; co", "1500"]
+        {
             assert!(svg.contains(needle), "{needle}");
         }
         assert!(ECHELLES.contains(&s.den));

@@ -107,12 +107,7 @@ pub const AGENT_ONLY: &[&str] = &["sketch.solve", "sketch.move3d"];
 pub const SECTIONS: &[Section] = &[
     // The tabs and panels of CathIA, for people who have never touched CAD: the same names, the same
     // order, every button in view, each with its own picture and a French name.
-    Section {
-        tab: "ÉDITION",
-        panel: "HISTORIQUE",
-        promoted: 4,
-        ids: &["edit.undo", "edit.redo", "edit.checkpoint", "edit.restore_checkpoint"],
-    },
+    Section { tab: "ÉDITION", panel: "HISTORIQUE", promoted: 4, ids: &["edit.undo", "edit.redo", "edit.checkpoint", "edit.restore_checkpoint"] },
     Section {
         tab: "ÉDITION",
         panel: "SÉLECTION",
@@ -123,7 +118,13 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "ÉDITION", panel: "CONTRÔLE", promoted: 3, ids: &["inspect.interference", "inspect.measure", "inspect.section"] },
     Section { tab: "ÉDITION", panel: "DÉPLACEMENT", promoted: 1, ids: &["occurrence.move"] },
     Section { tab: "CRÉER", panel: "MEUBLES", promoted: 2, ids: &["scout.meuble.create", "scout.coin.create"] },
-    Section { tab: "CRÉER", panel: "PIÈCES", promoted: 4, ids: &["scout.piece.traverse", "scout.piece.equerre", "scout.piece.claies", "scout.piece.filet"] },
+    Section {
+        tab: "CRÉER",
+        panel: "PIÈCES",
+        promoted: 4,
+        ids: &["scout.piece.traverse", "scout.piece.equerre", "scout.piece.claies", "scout.piece.filet"],
+    },
+    Section { tab: "CRÉER", panel: "TRESSAGE ET CORDES", promoted: 2, ids: &["scout.clayonnage", "scout.ph"] },
     Section {
         tab: "OPÉRATIONS",
         panel: "FAÇONNER",
@@ -134,11 +135,23 @@ pub const SECTIONS: &[Section] = &[
         tab: "OPÉRATIONS",
         panel: "ASSEMBLAGES",
         promoted: 5,
-        ids: &["scout.assemblage.tenon", "scout.assemblage.mibois", "scout.assemblage.aronde", "scout.assemblage.cheville", "scout.assemblage.brelage"],
+        ids: &[
+            "scout.assemblage.tenon",
+            "scout.assemblage.mibois",
+            "scout.assemblage.aronde",
+            "scout.assemblage.cheville",
+            "scout.assemblage.brelage",
+        ],
     },
     Section { tab: "OPÉRATIONS", panel: "BOOLÉENS", promoted: 1, ids: &["solid.combine"] },
     Section { tab: "OPÉRATIONS", panel: "MONTAGE", promoted: 1, ids: &["explode.create"] },
-    Section { tab: "FORMES", panel: "PRIMITIVES", promoted: 5, ids: &["solid.box", "solid.cylinder", "scout.profil.tube_rond", "solid.sphere", "solid.cone"] },
+    Section { tab: "PLANS", panel: "PLANS", promoted: 3, ids: &["scout.atelier.dessin", "scout.atelier.nomenclature", "scout.export.html"] },
+    Section {
+        tab: "FORMES",
+        panel: "PRIMITIVES",
+        promoted: 5,
+        ids: &["solid.box", "solid.cylinder", "scout.profil.tube_rond", "solid.sphere", "solid.cone"],
+    },
     Section {
         tab: "FORMES",
         panel: "PROFILÉS MÉTAL",
@@ -157,7 +170,18 @@ pub const SECTIONS: &[Section] = &[
         promoted: 5,
         ids: &["sketch.line", "sketch.rectangle.two_point", "sketch.circle.center", "sketch.arc.three_point", "sketch.polygon.inscribed"],
     },
-    Section { tab: "SKETCH", panel: "CONTRAINTES", promoted: 5, ids: &["sketch.constraint.horizontal_vertical", "sketch.constraint.parallel", "sketch.constraint.perpendicular", "sketch.constraint.equal", "sketch.constraint.coincident"] },
+    Section {
+        tab: "SKETCH",
+        panel: "CONTRAINTES",
+        promoted: 5,
+        ids: &[
+            "sketch.constraint.horizontal_vertical",
+            "sketch.constraint.parallel",
+            "sketch.constraint.perpendicular",
+            "sketch.constraint.equal",
+            "sketch.constraint.coincident",
+        ],
+    },
     Section { tab: "SKETCH", panel: "COTES", promoted: 1, ids: &["sketch.dimension"] },
     Section { tab: "SKETCH", panel: "COINS", promoted: 3, ids: &["sketch.fillet", "sketch.chamfer.equal_distance", "sketch.trim"] },
     Section { tab: "SKETCH", panel: "MODIFIER", promoted: 2, ids: &["sketch.offset", "sketch.mirror"] },
@@ -313,7 +337,7 @@ pub fn ribbon_family_label(family: &crate::sketch_families::Family) -> &'static 
 
 /// Registry placement → default ribbon destination, after explicit id overrides.
 pub const PLACEMENTS: &[(&str, &str, &str, &str)] = &[
-        ("SOLID", "CREATE", "MODEL", "CREATE"),
+    ("SOLID", "CREATE", "MODEL", "CREATE"),
     ("SOLID", "MODIFY", "MODEL", "MODIFY"),
     ("SOLID", "CONSTRUCT", "MODEL", "CONSTRUCT"),
     ("SOLID", "ASSEMBLE", "ASSEMBLE", "JOINTS"),

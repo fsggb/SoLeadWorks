@@ -98,21 +98,64 @@ pub enum SplitMode {
 pub enum Op {
     /// A stub joined to the end of the pole. `wide` is the local axis (0 = x, 1 = y) the flat
     /// tenon's width lies along.
-    Tenon { end: End, style: Style, d: f64, w: f64, len: f64, wide: u8, theta: f64, #[serde(default = "one")] typ: u8 },
+    Tenon {
+        end: End,
+        style: Style,
+        d: f64,
+        w: f64,
+        len: f64,
+        wide: u8,
+        theta: f64,
+        #[serde(default = "one")]
+        typ: u8,
+    },
     /// A cut that takes the tenon: `c` is where it starts (outside the pole), `u` its direction.
-    Mortise { c: V3, u: V3, style: Style, d: f64, w: f64, depth: f64, wide: u8, theta: f64, #[serde(default = "one")] typ: u8, #[serde(default)] open: f64 },
+    Mortise {
+        c: V3,
+        u: V3,
+        style: Style,
+        d: f64,
+        w: f64,
+        depth: f64,
+        wide: u8,
+        theta: f64,
+        #[serde(default = "one")]
+        typ: u8,
+        #[serde(default)]
+        open: f64,
+    },
     /// A box cut centred on `c` with half sizes `h` (a half-lap notch).
-    Notch { c: V3, h: V3 },
+    Notch {
+        c: V3,
+        h: V3,
+    },
     /// A round hole (a peg's).
-    Hole { c: V3, u: V3, d: f64, depth: f64 },
-    Split { mode: SplitMode },
+    Hole {
+        c: V3,
+        u: V3,
+        d: f64,
+        depth: f64,
+    },
+    Split {
+        mode: SplitMode,
+    },
     /// Cut everything beyond local z = `at` at that end.
-    CutOff { end: End, at: f64 },
+    CutOff {
+        end: End,
+        at: f64,
+    },
     /// The end `end` is cut to fit the round pole `with` (`#n`: the pole of index n of the part, or the
     /// component's name): the pole is built `extra` mm longer and the other pole's body is cut from it.
-    Saddle { with: String, end: End, extra: f64 },
+    Saddle {
+        with: String,
+        end: End,
+        extra: f64,
+    },
     /// A sharpened end: the last `len` mm taper to a point.
-    Point { end: End, len: f64 },
+    Point {
+        end: End,
+        len: f64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,7 +311,13 @@ impl TenonOpts {
 
 fn dominant(v: V3) -> usize {
     let a = v.map(f64::abs);
-    if a[0] >= a[1] && a[0] >= a[2] { 0 } else if a[1] >= a[2] { 1 } else { 2 }
+    if a[0] >= a[1] && a[0] >= a[2] {
+        0
+    } else if a[1] >= a[2] {
+        1
+    } else {
+        2
+    }
 }
 
 impl Build {
@@ -302,13 +351,24 @@ impl Build {
         let (tip, surf) = if end == End::End { (s1, tc - rr) } else { (s0, tc + rr) };
         let overlap = if end == End::End { tip - surf } else { surf - tip };
         if overlap > 120.0 {
-            return Err(format!("« {} » dépasse de {} mm dans « {} » : reculez-la pour qu'elle n'y entre que de quelques millimètres", pt.role, overlap.round(), pr.role));
+            return Err(format!(
+                "« {} » dépasse de {} mm dans « {} » : reculez-la pour qu'elle n'y entre que de quelques millimètres",
+                pt.role,
+                overlap.round(),
+                pr.role
+            ));
         }
         if (tip - tc).abs() > rr + 120.0 && overlap < -120.0 {
             return Err(format!("« {} » est trop loin de « {} » : rapprochez un bout de l'autre pièce", pt.role, pr.role));
         }
         let default_d = (dt * 0.55).min(dr / 3.0).max(8.0).round();
-        let d = if o.d > 0.0 { o.d } else if o.style.round() { default_d } else { (dt * 0.6).min(dr / 3.0 + 8.0).max(8.0).round() };
+        let d = if o.d > 0.0 {
+            o.d
+        } else if o.style.round() {
+            default_d
+        } else {
+            (dt * 0.6).min(dr / 3.0 + 8.0).max(8.0).round()
+        };
         let w = if o.w > 0.0 { o.w } else { (dt * 0.7).max(15.0).round() };
         let u_world = if end == End::End { pt.dir } else { mul(pt.dir, -1.0) };
         // Where the tenon enters `r`, and how much wood it finds there: a split log has a flat face.
@@ -451,7 +511,18 @@ impl Build {
         let reach = pr.radius() * 2.0 / len(cross(pt.dir, pr.dir)).max(0.35) + 20.0;
         let base = sub(ct, mul(pt.dir, reach / 2.0));
         let (c, u) = (pr.local(base), pr.local_dir(pt.dir));
-        self.poles[r].push(Op::Mortise { c, u, style: Style::Hache, d: pt.diameter + JEU, w: pt.diameter + JEU, depth: reach, wide: 0, theta: 0.0, typ: 1, open: 0.0 })
+        self.poles[r].push(Op::Mortise {
+            c,
+            u,
+            style: Style::Hache,
+            d: pt.diameter + JEU,
+            w: pt.diameter + JEU,
+            depth: reach,
+            wide: 0,
+            theta: 0.0,
+            typ: 1,
+            open: 0.0,
+        })
     }
 
     /// A peg of diameter `d` through the point `p` along `k`, through `a` and `b`.
@@ -495,7 +566,8 @@ impl Build {
             (Some(x), Some(y)) if a != b => (x.clone(), y.clone()),
             _ => return Err("choisissez deux pièces différentes".into()),
         };
-        let (ca, cb, _, _) = closest(pa.origin, pa.dir, pb.origin, pb.dir).ok_or("les deux pièces sont parallèles : un brêlage demande qu'elles se croisent")?;
+        let (ca, cb, _, _) =
+            closest(pa.origin, pa.dir, pb.origin, pb.dir).ok_or("les deux pièces sont parallèles : un brêlage demande qu'elles se croisent")?;
         let h = (turns * rope).clamp(rope, 200.0);
         for (p, c) in [(&pa, ca), (&pb, cb)] {
             let o = sub(c, mul(p.dir, h / 2.0));
@@ -557,7 +629,15 @@ pub fn cut_list(poles: &[Pole]) -> Vec<CutRow> {
         let (l, cl) = ((p.length * 10.0).round() / 10.0, (p.cut_length() * 10.0).round() / 10.0);
         match rows.iter_mut().find(|r| r.role == p.role && r.diameter == p.diameter && r.width == p.width && r.length == l && r.cut_length == cl) {
             Some(r) => r.count += 1,
-            None => rows.push(CutRow { role: p.role.clone(), diameter: p.diameter, width: p.width, length: l, count: 1, cut_length: cl, tenons: p.tenons().count() }),
+            None => rows.push(CutRow {
+                role: p.role.clone(),
+                diameter: p.diameter,
+                width: p.width,
+                length: l,
+                count: 1,
+                cut_length: cl,
+                tenons: p.tenons().count(),
+            }),
         }
     }
     rows
@@ -573,7 +653,9 @@ pub fn joint_summary(poles: &[Pole]) -> Vec<(String, usize)> {
     for p in poles {
         for o in &p.ops {
             match o {
-                Op::Tenon { style, d, w, .. } => bump(if style.round() { format!("{} Ø{} mm", style.label(), d) } else { format!("{} {}×{} mm", style.label(), w, d) }),
+                Op::Tenon { style, d, w, .. } => {
+                    bump(if style.round() { format!("{} Ø{} mm", style.label(), d) } else { format!("{} {}×{} mm", style.label(), w, d) })
+                }
                 Op::Notch { .. } => bump("mi-bois (deux entailles)".into()),
                 Op::Split { mode } => bump(if *mode == SplitMode::Demi { "rondin fendu en deux".into() } else { "quart de bois".into() }),
                 Op::Point { .. } => bump("pointe".into()),

@@ -46,9 +46,9 @@ pub mod dialogs_motion;
 pub mod dialogs_move;
 pub mod dialogs_part_size;
 pub mod dialogs_parts;
-pub mod dialogs_scout;
 pub mod dialogs_plastic;
 pub mod dialogs_save_mesh;
+pub mod dialogs_scout;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
 pub mod dialogs_sweep;
@@ -195,7 +195,6 @@ pub mod op_auto;
 pub mod open_elsewhere;
 pub(crate) mod open_meshing;
 pub mod params_dialog;
-pub mod scout_ui;
 pub mod personal_sheet_rules;
 pub(crate) mod pick_index;
 pub(crate) mod place_gizmo;
@@ -230,6 +229,7 @@ mod rule_editor_tests;
 pub mod save_job;
 pub mod scenario;
 pub(crate) mod scene_palette;
+pub mod scout_ui;
 pub mod select_other;
 pub mod selection;
 pub mod settings_profiles;
@@ -384,7 +384,7 @@ impl Default for UiState {
             perspective: false,
             auto_ortho_faces: false,
             palette_open: false,
-            dark: true,
+            dark: false, // SoLeadWorks : clair par défaut (voir prefs.rs, theme)
             pick_off: Vec::new(),
             pick_bodies: false,
             pick_components: false,

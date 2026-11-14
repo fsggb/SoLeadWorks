@@ -41,11 +41,23 @@ fn operations(p: &Pole) -> String {
     let mut v: Vec<String> = Vec::new();
     for o in &p.ops {
         v.push(match o {
-            Op::Tenon { style, d, w, .. } => if style.round() { format!("{} Ø{}", style.label(), mm(*d)) } else { format!("{} {}×{}", style.label(), mm(*w), mm(*d)) },
+            Op::Tenon { style, d, w, .. } => {
+                if style.round() {
+                    format!("{} Ø{}", style.label(), mm(*d))
+                } else {
+                    format!("{} {}×{}", style.label(), mm(*w), mm(*d))
+                }
+            }
             Op::Mortise { d, .. } => format!("mortaise Ø{}", mm(*d)),
             Op::Notch { .. } => "mi-bois".to_string(),
             Op::Hole { d, .. } => format!("trou Ø{}", mm(*d)),
-            Op::Split { mode } => if *mode == SplitMode::Demi { "fendu en deux".into() } else { "quart de bois".into() },
+            Op::Split { mode } => {
+                if *mode == SplitMode::Demi {
+                    "fendu en deux".into()
+                } else {
+                    "quart de bois".into()
+                }
+            }
             Op::CutOff { .. } => "coupé".to_string(),
             Op::Saddle { .. } => "gueule de loup".to_string(),
             Op::Point { len, .. } => format!("pointe {}", mm(*len)),
@@ -63,12 +75,18 @@ pub fn of(poles: &[Pole]) -> Nomenclature {
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let sample = poles.iter().find(|p| p.role == r.role && p.diameter == r.diameter && p.width == r.width && ((p.length * 10.0).round() / 10.0 - r.length).abs() < 0.05);
+            let sample = poles.iter().find(|p| {
+                p.role == r.role && p.diameter == r.diameter && p.width == r.width && ((p.length * 10.0).round() / 10.0 - r.length).abs() < 0.05
+            });
             PieceRow {
                 n: i + 1,
                 qte: r.count,
                 designation: r.role.clone(),
-                dimensions: if r.width > 0.0 { format!("{} × {} × {} mm", mm(r.diameter), mm(r.width), mm(r.length)) } else { format!("Ø{} × {} mm", mm(r.diameter), mm(r.length)) },
+                dimensions: if r.width > 0.0 {
+                    format!("{} × {} × {} mm", mm(r.diameter), mm(r.width), mm(r.length))
+                } else {
+                    format!("Ø{} × {} mm", mm(r.diameter), mm(r.length))
+                },
                 assemblages: sample.map(operations).unwrap_or_default(),
                 essence: if r.role == "ficelle" || r.role == "brêlage" { "ficelle".into() } else { "bois rond".into() },
             }
@@ -77,7 +95,8 @@ pub fn of(poles: &[Pole]) -> Nomenclature {
     let assemblages = joint_summary(poles);
     let wood: Vec<&Pole> = poles.iter().filter(|p| p.role != "ficelle" && p.role != "brêlage").collect();
     let metres: f64 = wood.iter().map(|p| p.cut_length()).sum::<f64>() / 1000.0;
-    let joints: usize = assemblages.iter().filter(|(k, _)| !k.starts_with("rondin fendu") && !k.starts_with("quart") && k != "pointe").map(|(_, c)| *c).sum();
+    let joints: usize =
+        assemblages.iter().filter(|(k, _)| !k.starts_with("rondin fendu") && !k.starts_with("quart") && k != "pointe").map(|(_, c)| *c).sum();
     // rope: every turn of a lashing goes round the pole; the net is its ropes' length
     let rope_m: f64 = poles
         .iter()
@@ -101,15 +120,45 @@ pub fn of(poles: &[Pole]) -> Nomenclature {
         }
     }
     for (k, m, c) in by_section {
-        materiel.push(MatRow { quantite: format!("{m:.2} m"), designation: "Bois rond".into(), dimensions: k, operations: format!("{c} pièces"), essence: "bois rond".into() });
+        materiel.push(MatRow {
+            quantite: format!("{m:.2} m"),
+            designation: "Bois rond".into(),
+            dimensions: k,
+            operations: format!("{c} pièces"),
+            essence: "bois rond".into(),
+        });
     }
-    materiel.push(MatRow { quantite: format!("{metres:.2} m"), designation: "Total bois".into(), dimensions: String::new(), operations: String::new(), essence: "bois rond".into() });
-    materiel.push(MatRow { quantite: joints.to_string(), designation: "Assemblages".into(), dimensions: String::new(), operations: String::new(), essence: String::new() });
+    materiel.push(MatRow {
+        quantite: format!("{metres:.2} m"),
+        designation: "Total bois".into(),
+        dimensions: String::new(),
+        operations: String::new(),
+        essence: "bois rond".into(),
+    });
+    materiel.push(MatRow {
+        quantite: joints.to_string(),
+        designation: "Assemblages".into(),
+        dimensions: String::new(),
+        operations: String::new(),
+        essence: String::new(),
+    });
     if rope_m > 0.0 {
-        materiel.push(MatRow { quantite: format!("{rope_m:.1} m"), designation: "Ficelle ou corde".into(), dimensions: String::new(), operations: "brêlages et filets".into(), essence: "ficelle".into() });
+        materiel.push(MatRow {
+            quantite: format!("{rope_m:.1} m"),
+            designation: "Ficelle ou corde".into(),
+            dimensions: String::new(),
+            operations: "brêlages et filets".into(),
+            essence: "ficelle".into(),
+        });
     }
     if staples > 0 {
-        materiel.push(MatRow { quantite: staples.to_string(), designation: "Clous cavaliers".into(), dimensions: String::new(), operations: "fixation des claies".into(), essence: String::new() });
+        materiel.push(MatRow {
+            quantite: staples.to_string(),
+            designation: "Clous cavaliers".into(),
+            dimensions: String::new(),
+            operations: "fixation des claies".into(),
+            essence: String::new(),
+        });
     }
     Nomenclature { pieces, assemblages, materiel }
 }

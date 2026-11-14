@@ -30,7 +30,8 @@ pub const ASSEMBLAGES: &[(&str, &str)] = &[
 ];
 
 /// The groups CathIA lists the assemblages in: (heading, first kind, number of kinds).
-const GROUPES: &[(&str, usize, usize)] = &[("Tenons et mortaises", 1, 4), ("Mi-bois", 0, 1), ("Queues d’aronde", 5, 3), ("Chevilles et brêlage", 8, 2)];
+const GROUPES: &[(&str, usize, usize)] =
+    &[("Tenons et mortaises", 1, 4), ("Mi-bois", 0, 1), ("Queues d’aronde", 5, 3), ("Chevilles et brêlage", 8, 2)];
 
 /// What each assemblage blocks, in CathIA's words.
 fn degres(kind: &str) -> &'static str {
@@ -44,7 +45,8 @@ fn degres(kind: &str) -> &'static str {
     }
 }
 
-const FACONNAGES: &[(&str, &str)] = &[("demi", "Fendre en deux"), ("quart", "Quart de bois"), ("couper", "Couper à la longueur"), ("pointe", "Tailler une pointe")];
+const FACONNAGES: &[(&str, &str)] =
+    &[("demi", "Fendre en deux"), ("quart", "Quart de bois"), ("couper", "Couper à la longueur"), ("pointe", "Tailler une pointe")];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -57,6 +59,10 @@ pub enum Which {
     Filet,
     Coin,
     Profil,
+    /// Claies tressées entre des supports (CathIA : Clayonnage).
+    Clayonnage,
+    /// Cordes entre deux traverses (CathIA : PH décoratif).
+    Ph,
 }
 
 /// One dialog's values (the fields it does not use stay unused).
@@ -97,6 +103,9 @@ impl Sc {
             Which::Claies => ("1000".into(), "600".into(), "20".into()),
             Which::Filet => ("1000".into(), "600".into(), "30".into()),
             Which::Profil => ("40".into(), "3".into(), "1000".into()),
+            // clayonnage : Ø des claies, pas (0 = jointives), marge ; PH : nombre de cordes, Ø de la corde
+            Which::Clayonnage => ("20".into(), "0".into(), "10".into()),
+            Which::Ph => ("15".into(), "4".into(), String::new()),
             _ => (String::new(), String::new(), String::new()),
         };
         let mut s = Sc {
@@ -138,6 +147,11 @@ impl Sc {
 
 /// The dialog a Scout ribbon button starts.
 pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+    start_kind(id).map(|(sc, inputs)| (Kind::Scout(sc), inputs))
+}
+
+/// Les valeurs et les choix de la boîte qu'ouvre le bouton `id`.
+fn start_kind(id: &str) -> Option<(Sc, Vec<SelInput>)> {
     let two = || vec![SelInput::new("Pièce 1 (porte le tenon)", BODIES, false), SelInput::new("Pièce 2 (reçoit la mortaise)", BODIES, false)];
     let (sc, inputs) = match id {
         "scout.meuble.create" => (Sc::new(Which::Meuble, 1), Vec::new()),
@@ -151,6 +165,14 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
         "scout.profil.corniere" => (Sc::new(Which::Profil, 2), Vec::new()),
         "scout.profil.u" => (Sc::new(Which::Profil, 3), Vec::new()),
         "scout.profil.i" => (Sc::new(Which::Profil, 4), Vec::new()),
+        "scout.clayonnage" => {
+            let mut sc = Sc::new(Which::Clayonnage, 0);
+            sc.through = true; // traverse fine au milieu
+            sc.length = "0".into(); // zone : jusqu'au bout
+            sc.d = "30".into();
+            (sc, vec![SelInput::new("Supports (au moins 2 traverses parallèles)", BODIES, true)])
+        }
+        "scout.ph" => (Sc::new(Which::Ph, 0), vec![SelInput::new("Traverse 1", BODIES, false), SelInput::new("Traverse 2", BODIES, false)]),
         _ => {
             if let Some(k) = id.strip_prefix("scout.assemblage.") {
                 let kind = match k {
@@ -170,7 +192,7 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             }
         }
     };
-    Some((Kind::Scout(sc), inputs))
+    Some((sc, inputs))
 }
 
 pub fn title(k: &Sc) -> &'static str {
@@ -184,6 +206,8 @@ pub fn title(k: &Sc) -> &'static str {
         Which::Filet => "FILET DE FICELLE",
         Which::Coin => "COIN DE PATROUILLE",
         Which::Profil => "PROFILÉ MÉTAL",
+        Which::Clayonnage => "CLAYONNAGE",
+        Which::Ph => "PH (CORDES)",
     }
 }
 
@@ -198,6 +222,8 @@ pub fn command_id(k: &Sc) -> &'static str {
         Which::Filet => "scout.piece.filet",
         Which::Coin => "scout.coin.create",
         Which::Profil => "scout.profil",
+        Which::Clayonnage => "scout.clayonnage",
+        Which::Ph => "scout.ph",
     }
 }
 
@@ -205,17 +231,43 @@ fn number(label: &str, text: &str) -> Result<f64, String> {
     text.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(|| format!("{label} : un nombre est attendu"))
 }
 
+/// Libellé court pour la colonne des libellés (sinon tronqué : « Hauteur du dessu… ») ; la précision entre
+/// parenthèses passe dans l'indication du champ. « Diamètre » devient « Ø », l'usage des menuisiers.
+fn court(label: &str) -> (String, String) {
+    let (tete, precision) = match label.find(" (") {
+        Some(i) => (&label[..i], label[i + 2..].trim_end_matches(')').to_string()),
+        None => (label, String::new()),
+    };
+    let mut t = tete.to_string();
+    for (long, bref) in [
+        ("Hauteur du dessus du plateau", "Hauteur du plateau"),
+        ("Hauteur du plan de travail", "Hauteur de travail"),
+        ("Diamètre de la ", "Ø de la "),
+        ("Diamètre des ", "Ø des "),
+        ("Diamètre du ", "Ø du "),
+        ("Diamètre ", "Ø "),
+        ("Diamètre", "Ø"),
+    ] {
+        if t.starts_with(long) {
+            t = format!("{bref}{}", &t[long.len()..]);
+            break;
+        }
+    }
+    (t, precision)
+}
+
 fn setting_row(ui: &mut egui::Ui, d: &ParamDef, val: &mut String) {
+    let (libelle, precision) = court(d.label);
     if !d.options.is_empty() {
         let mut i = val.parse::<f64>().map_or(0, |v| v as usize).min(d.options.len() - 1);
-        choice_row(ui, d.label, d.key, &mut i, d.options);
+        choice_row(ui, &libelle, d.key, &mut i, d.options);
         *val = i.to_string();
     } else if d.check {
         let mut on = val != "0";
-        crate::dialogs::form_row(ui, d.label, |ui| check(ui, &mut on));
+        crate::dialogs::form_row(ui, &libelle, |ui| check(ui, &mut on));
         *val = if on { "1".into() } else { "0".into() };
     } else {
-        text_row(ui, d.label, val, "");
+        text_row(ui, &libelle, val, &precision);
     }
 }
 
@@ -229,7 +281,8 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Sc) -> bool {
                 k.refill();
             }
             if let Some(m) = MODELS.get(k.kind) {
-                ui.label(egui::RichText::new(m.summary).weak());
+                // Le résumé du modèle sur plusieurs lignes, en entier (il était coupé à la largeur de la boîte).
+                ui.add(egui::Label::new(egui::RichText::new(format!("{} Dimensions en millimètres.", m.summary)).weak()).wrap());
                 text_row(ui, "Nom", &mut k.name, m.name);
                 for (d, v) in m.params.iter().zip(k.vals.iter_mut()) {
                     setting_row(ui, d, v);
@@ -319,6 +372,28 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Sc) -> bool {
             text_row(ui, "Longueur (mm)", &mut k.c, "");
             choice_row(ui, "Direction", "sc_dir2", &mut k.dir, &["Longueur (X)", "Largeur (Y)", "Verticale (Z)"]);
         }
+        Which::Clayonnage => {
+            ui.add(egui::Label::new(egui::RichText::new("Les claies passent alternativement sous et sur les supports ; une claie sur deux est inversée. Choisissez les supports dans la vue (Ctrl pour en ajouter).").weak()).wrap());
+            text_row(ui, "Ø des claies", &mut k.a, "mm, de 8 à 40");
+            text_row(ui, "Pas", &mut k.b, "mm, 0 = jointives");
+            text_row(ui, "Marge aux bouts", &mut k.c, "mm");
+            text_row(ui, "Longueur clayée", &mut k.length, "mm, 0 = jusqu’au bout");
+            crate::dialogs::form_row(ui, "Première claie dessus", |ui| check(ui, &mut k.chev));
+            crate::dialogs::form_row(ui, "Traverse fine au milieu", |ui| check(ui, &mut k.through));
+            if k.through {
+                text_row(ui, "Ø traverse fine", &mut k.d, "mm (deux supports seulement)");
+            }
+        }
+        Which::Ph => {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Des cordes tendues entre deux traverses qui se rejoignent dessinent une surface courbe (décoratif).").weak(),
+                )
+                .wrap(),
+            );
+            text_row(ui, "Nombre de cordes", &mut k.a, "de 3 à 80");
+            text_row(ui, "Ø de la corde", &mut k.b, "mm");
+        }
         Which::Coin => {
             text_row(ui, "Nom du coin", &mut k.name, "Coin de patrouille");
             ui.label(egui::RichText::new("Une table, deux bancs, une étagère et une table de prépa : ajoutez ensuite d’autres meubles.").weak());
@@ -398,7 +473,28 @@ pub fn commands(k: &Sc, inputs: &[SelInput]) -> Result<Vec<(String, Value)>, Str
             json!({"kind": kinds.get(k.kind).copied().unwrap_or("tube_carre"), "size": number("Dimension", &k.a)?, "epaisseur": number("Épaisseur", &k.b)?, "length": number("Longueur", &k.c)?, "dir": dir})
         }
         Which::Coin => {
-            if k.name.trim().is_empty() { json!({}) } else { json!({"name": k.name.trim()}) }
+            if k.name.trim().is_empty() {
+                json!({})
+            } else {
+                json!({"name": k.name.trim()})
+            }
+        }
+        Which::Clayonnage => {
+            let supports: Vec<String> = inputs
+                .first()
+                .map(|inp| inp.items.iter().filter_map(|s| if let Sel::Body { name } = s { Some(name.clone()) } else { None }).collect())
+                .unwrap_or_default();
+            if supports.len() < 2 {
+                return Err("choisissez au moins deux supports dans la vue (Ctrl + clic pour en ajouter)".into());
+            }
+            let mut p = json!({"supports": supports, "d": number("Ø des claies", &k.a)?, "pas": number("Pas", &k.b)?, "marge": number("Marge", &k.c)?, "zone": number("Longueur clayée", &k.length)?, "dessus": k.chev, "milieu": k.through});
+            if k.through {
+                p["dm"] = json!(number("Ø traverse fine", &k.d)?);
+            }
+            p
+        }
+        Which::Ph => {
+            json!({"a": body_name(inputs, 0)?, "b": body_name(inputs, 1)?, "n": number("Nombre de cordes", &k.a)?, "d": number("Ø de la corde", &k.b)?})
         }
     };
     Ok(vec![(id, p)])
@@ -429,6 +525,31 @@ mod tests {
         assert!(commands(&k, &[]).is_err());
         let inputs = [SelInput::new("a", BODIES, false), SelInput::new("b", BODIES, false)];
         assert!(commands(&k, &inputs).is_err());
+    }
+
+    #[test]
+    fn le_clayonnage_et_le_ph_vont_du_dialogue_au_moteur() {
+        let mut s = solidcraft_engine::Session::default();
+        for (n, y) in [("A", 0), ("B", 400)] {
+            assert!(s.execute("scout.piece.traverse", &json!({"name": n, "diameter": 60, "length": 800, "at": [0, y, 500]})).is_ok());
+        }
+        let (sc, mut inputs) = match start_kind("scout.clayonnage") {
+            Some(v) => v,
+            None => panic!("pas de dialogue de clayonnage"),
+        };
+        assert!(commands(&sc, &inputs).is_err(), "sans supports choisis");
+        inputs[0].items = vec![Sel::Body { name: "A".into() }, Sel::Body { name: "B".into() }];
+        let c = commands(&sc, &inputs).unwrap_or_default();
+        assert!(s.execute(&c[0].0, &c[0].1).is_ok(), "{}", c[0].1);
+        assert!(s.execute("scout.piece.traverse", &json!({"name": "V", "diameter": 60, "length": 800, "at": [0, 0, 560], "dir": [0, 0, 1]})).is_ok());
+        let (ph, mut inputs) = match start_kind("scout.ph") {
+            Some(v) => v,
+            None => panic!("pas de dialogue de PH"),
+        };
+        inputs[0].items = vec![Sel::Body { name: "A".into() }];
+        inputs[1].items = vec![Sel::Body { name: "V".into() }];
+        let c = commands(&ph, &inputs).unwrap_or_default();
+        assert!(s.execute(&c[0].0, &c[0].1).is_ok(), "{}", c[0].1);
     }
 
     #[test]

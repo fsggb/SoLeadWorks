@@ -191,90 +191,103 @@ pub fn show_dessin(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let mut save: Option<(&'static str, &'static str, &'static str, Value)> = None;
-    egui::Window::new("Dessin technique").id(egui::Id::new("sc_dessin")).open(&mut open).default_pos([40.0, 150.0]).default_size([980.0, 620.0]).resizable(true).show(ctx, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let mut names = vec!["Automatique".to_string()];
-            names.extend(list.iter().map(|(l, _, _)| l.clone()));
-            ui.label("Sujet");
-            egui::ComboBox::from_id_salt("sc_dessin_sujet").selected_text(names.get(d.subject).cloned().unwrap_or_default()).show_ui(ui, |ui| {
-                for (i, n) in names.iter().enumerate() {
-                    ui.selectable_value(&mut d.subject, i, n);
-                }
-            });
-            ui.label("Format");
-            egui::ComboBox::from_id_salt("sc_dessin_format").selected_text(["A3", "A4"][d.format.min(1)]).show_ui(ui, |ui| {
-                ui.selectable_value(&mut d.format, 0, "A3 (420 × 297)");
-                ui.selectable_value(&mut d.format, 1, "A4 (297 × 210)");
-            });
-            ui.label("Échelle");
-            let label = if d.echelle == 0 { "Automatique".to_string() } else { format!("1:{}", ECHELLES.get(d.echelle - 1).copied().unwrap_or(1.0)) };
-            egui::ComboBox::from_id_salt("sc_dessin_echelle").selected_text(label).show_ui(ui, |ui| {
-                ui.selectable_value(&mut d.echelle, 0, "Automatique");
-                for (i, e) in ECHELLES.iter().enumerate() {
-                    ui.selectable_value(&mut d.echelle, i + 1, format!("1:{e}"));
-                }
-            });
-            ui.add(egui::Slider::new(&mut d.zoom, 0.5..=3.0).text("Zoom"));
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Vues :");
-            for (v, on) in View::ALL.iter().zip(d.vues.iter_mut()) {
-                ui.checkbox(on, v.label().trim_start_matches("Vue de ").trim_start_matches("Vue "));
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut d.cotes, "Cotes d'ensemble");
-            ui.checkbox(&mut d.cotes_pieces, "Diamètre des pièces");
-            ui.checkbox(&mut d.tableau, "Nomenclature sur la feuille");
-        });
-        egui::CollapsingHeader::new("Cartouche").default_open(false).show(ui, |ui| {
-            text_field(ui, "Titre", &mut d.titre);
-            text_field(ui, "Société", &mut d.societe);
-            text_field(ui, "Dessinateur", &mut d.dessinateur);
-            text_field(ui, "Date", &mut d.date);
-            text_field(ui, "Matériau", &mut d.materiau);
-            text_field(ui, "Référence", &mut d.reference);
-            text_field(ui, "Indice", &mut d.indice);
-        });
-        let params = dessin_params(&d, &list);
-        let key = params.to_string();
-        let revision = app.session.revision;
-        if !matches!(&d.cache, Some((r, k, _)) if *r == revision && *k == key) {
-            let res = app.session.execute("scout.atelier.dessin", &params).map_err(|e| e.to_string());
-            d.cache = Some((revision, key, res));
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Exporter la feuille (SVG)…").clicked() {
-                save = Some(("plan.svg", "svg", "scout.atelier.dessin", params.clone()));
-            }
-            if ui.button("Exporter toutes les pages (HTML)…").clicked() {
-                save = Some(("plans.html", "html", "scout.export.html", json!({"title": if d.titre.is_empty() { "Plans du camp" } else { d.titre.as_str() }, "author": d.dessinateur})));
-            }
-            if let Some(m) = &d.message {
-                ui.label(egui::RichText::new(m).weak());
-            }
-        });
-        ui.separator();
-        match d.cache.as_ref().map(|c| &c.2) {
-            Some(Ok(v)) => {
-                let size = (v["sheet"]["w"].as_f64().unwrap_or(420.0), v["sheet"]["h"].as_f64().unwrap_or(297.0));
-                if let Some(e) = v["sheet"]["echelle"].as_f64() {
-                    ui.label(egui::RichText::new(format!("Échelle 1:{e}")).weak());
-                }
-                let prims: Vec<Prim> = v["prims"].as_array().map(|a| a.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect()).unwrap_or_default();
-                egui::ScrollArea::both().show(ui, |ui| {
-                    let w = (ui.available_width() - 12.0).max(300.0) * d.zoom;
-                    let (rect, _) = ui.allocate_exact_size(vec2(w, w * (size.1 / size.0) as f32), egui::Sense::hover());
-                    paint_sheet(ui.painter(), rect, size, &prims);
+    egui::Window::new("Dessin technique")
+        .id(egui::Id::new("sc_dessin"))
+        .open(&mut open)
+        .default_pos([40.0, 150.0])
+        .default_size([980.0, 620.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let mut names = vec!["Automatique".to_string()];
+                names.extend(list.iter().map(|(l, _, _)| l.clone()));
+                ui.label("Sujet");
+                egui::ComboBox::from_id_salt("sc_dessin_sujet").selected_text(names.get(d.subject).cloned().unwrap_or_default()).show_ui(ui, |ui| {
+                    for (i, n) in names.iter().enumerate() {
+                        ui.selectable_value(&mut d.subject, i, n);
+                    }
                 });
+                ui.label("Format");
+                egui::ComboBox::from_id_salt("sc_dessin_format").selected_text(["A3", "A4"][d.format.min(1)]).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.format, 0, "A3 (420 × 297)");
+                    ui.selectable_value(&mut d.format, 1, "A4 (297 × 210)");
+                });
+                ui.label("Échelle");
+                let label =
+                    if d.echelle == 0 { "Automatique".to_string() } else { format!("1:{}", ECHELLES.get(d.echelle - 1).copied().unwrap_or(1.0)) };
+                egui::ComboBox::from_id_salt("sc_dessin_echelle").selected_text(label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.echelle, 0, "Automatique");
+                    for (i, e) in ECHELLES.iter().enumerate() {
+                        ui.selectable_value(&mut d.echelle, i + 1, format!("1:{e}"));
+                    }
+                });
+                ui.add(egui::Slider::new(&mut d.zoom, 0.5..=3.0).text("Zoom"));
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Vues :");
+                for (v, on) in View::ALL.iter().zip(d.vues.iter_mut()) {
+                    ui.checkbox(on, v.label().trim_start_matches("Vue de ").trim_start_matches("Vue "));
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut d.cotes, "Cotes d'ensemble");
+                ui.checkbox(&mut d.cotes_pieces, "Diamètre des pièces");
+                ui.checkbox(&mut d.tableau, "Nomenclature sur la feuille");
+            });
+            egui::CollapsingHeader::new("Cartouche").default_open(false).show(ui, |ui| {
+                text_field(ui, "Titre", &mut d.titre);
+                text_field(ui, "Société", &mut d.societe);
+                text_field(ui, "Dessinateur", &mut d.dessinateur);
+                text_field(ui, "Date", &mut d.date);
+                text_field(ui, "Matériau", &mut d.materiau);
+                text_field(ui, "Référence", &mut d.reference);
+                text_field(ui, "Indice", &mut d.indice);
+            });
+            let params = dessin_params(&d, &list);
+            let key = params.to_string();
+            let revision = app.session.revision;
+            if !matches!(&d.cache, Some((r, k, _)) if *r == revision && *k == key) {
+                let res = app.session.execute("scout.atelier.dessin", &params).map_err(|e| e.to_string());
+                d.cache = Some((revision, key, res));
             }
-            Some(Err(e)) => {
-                ui.label(egui::RichText::new(e).color(Color32::from_rgb(200, 60, 60)));
-                ui.label("Créez un meuble (onglet Créer) pour dessiner son plan.");
+            ui.horizontal(|ui| {
+                if ui.button("Exporter la feuille (SVG)…").clicked() {
+                    save = Some(("plan.svg", "svg", "scout.atelier.dessin", params.clone()));
+                }
+                if ui.button("Exporter toutes les pages (HTML)…").clicked() {
+                    save = Some((
+                        "plans.html",
+                        "html",
+                        "scout.export.html",
+                        json!({"title": if d.titre.is_empty() { "Plans du camp" } else { d.titre.as_str() }, "author": d.dessinateur}),
+                    ));
+                }
+                if let Some(m) = &d.message {
+                    ui.label(egui::RichText::new(m).weak());
+                }
+            });
+            ui.separator();
+            match d.cache.as_ref().map(|c| &c.2) {
+                Some(Ok(v)) => {
+                    let size = (v["sheet"]["w"].as_f64().unwrap_or(420.0), v["sheet"]["h"].as_f64().unwrap_or(297.0));
+                    if let Some(e) = v["sheet"]["echelle"].as_f64() {
+                        ui.label(egui::RichText::new(format!("Échelle 1:{e}")).weak());
+                    }
+                    let prims: Vec<Prim> =
+                        v["prims"].as_array().map(|a| a.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect()).unwrap_or_default();
+                    egui::ScrollArea::both().show(ui, |ui| {
+                        let w = (ui.available_width() - 12.0).max(300.0) * d.zoom;
+                        let (rect, _) = ui.allocate_exact_size(vec2(w, w * (size.1 / size.0) as f32), egui::Sense::hover());
+                        paint_sheet(ui.painter(), rect, size, &prims);
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.label(egui::RichText::new(e).color(Color32::from_rgb(200, 60, 60)));
+                    ui.label("Créez un meuble (onglet Créer) pour dessiner son plan.");
+                }
+                None => {}
             }
-            None => {}
-        }
-    });
+        });
     if let Some((name, ext, command, params)) = save {
         app.pick_save_command(name, &[ext], command, params);
         d.message = Some("Choisissez où enregistrer le fichier.".into());
@@ -294,88 +307,97 @@ pub fn show_nomenclature(app: &mut SolveApp, ctx: &egui::Context) {
     let mut open = true;
     let mut save = false;
     let mut copy: Option<String> = None;
-    egui::Window::new("Nomenclature").id(egui::Id::new("sc_nomenclature")).open(&mut open).default_pos([60.0, 170.0]).default_size([760.0, 520.0]).resizable(true).show(ctx, |ui| {
-        let mut names = vec!["Tout le projet".to_string()];
-        names.extend(list.iter().map(|(l, _, _)| l.clone()));
-        ui.horizontal(|ui| ui.label("Sujet"));
-        egui::ComboBox::from_id_salt("sc_nomenclature_sujet").selected_text(names.get(n.subject).cloned().unwrap_or_default()).show_ui(ui, |ui| {
-            for (i, name) in names.iter().enumerate() {
-                ui.selectable_value(&mut n.subject, i, name);
+    egui::Window::new("Nomenclature")
+        .id(egui::Id::new("sc_nomenclature"))
+        .open(&mut open)
+        .default_pos([60.0, 170.0])
+        .default_size([760.0, 520.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            let mut names = vec!["Tout le projet".to_string()];
+            names.extend(list.iter().map(|(l, _, _)| l.clone()));
+            ui.horizontal(|ui| ui.label("Sujet"));
+            egui::ComboBox::from_id_salt("sc_nomenclature_sujet").selected_text(names.get(n.subject).cloned().unwrap_or_default()).show_ui(
+                ui,
+                |ui| {
+                    for (i, name) in names.iter().enumerate() {
+                        ui.selectable_value(&mut n.subject, i, name);
+                    }
+                },
+            );
+            let revision = app.session.revision;
+            if !matches!(&n.cache, Some((r, s, _)) if *r == revision && *s == n.subject) {
+                let params = match pick_name(n.subject, &list) {
+                    Some((k, name)) => json!({ k: name }),
+                    None => json!({}),
+                };
+                let res = app.session.execute("scout.atelier.nomenclature", &params).map_err(|e| e.to_string());
+                n.cache = Some((revision, n.subject, res));
             }
-        });
-        let revision = app.session.revision;
-        if !matches!(&n.cache, Some((r, s, _)) if *r == revision && *s == n.subject) {
-            let params = match pick_name(n.subject, &list) {
-                Some((k, name)) => json!({ k: name }),
-                None => json!({}),
-            };
-            let res = app.session.execute("scout.atelier.nomenclature", &params).map_err(|e| e.to_string());
-            n.cache = Some((revision, n.subject, res));
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Exporter (CSV)…").clicked() {
-                save = true;
-            }
-            if ui.button("Copier").clicked()
-                && let Some(Ok(v)) = n.cache.as_ref().map(|c| &c.2)
-            {
-                copy = v["csv"].as_str().map(str::to_string);
-            }
-            if let Some(m) = &n.message {
-                ui.label(egui::RichText::new(m).weak());
-            }
-        });
-        ui.separator();
-        match n.cache.as_ref().map(|c| &c.2) {
-            Some(Ok(v)) => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Pièces");
-                    egui::Grid::new("sc_nom_pieces").striped(true).show(ui, |ui| {
-                        for h in ["N°", "Qté", "Désignation", "Dimensions", "Assemblages", "Essence"] {
-                            ui.strong(h);
-                        }
-                        ui.end_row();
-                        for r in v["pieces"].as_array().into_iter().flatten() {
-                            ui.label(r["n"].to_string());
-                            ui.label(r["qte"].to_string());
-                            for k in ["designation", "dimensions", "assemblages", "essence"] {
-                                ui.label(r[k].as_str().unwrap_or(""));
+            ui.horizontal(|ui| {
+                if ui.button("Exporter (CSV)…").clicked() {
+                    save = true;
+                }
+                if ui.button("Copier").clicked()
+                    && let Some(Ok(v)) = n.cache.as_ref().map(|c| &c.2)
+                {
+                    copy = v["csv"].as_str().map(str::to_string);
+                }
+                if let Some(m) = &n.message {
+                    ui.label(egui::RichText::new(m).weak());
+                }
+            });
+            ui.separator();
+            match n.cache.as_ref().map(|c| &c.2) {
+                Some(Ok(v)) => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Pièces");
+                        egui::Grid::new("sc_nom_pieces").striped(true).show(ui, |ui| {
+                            for h in ["N°", "Qté", "Désignation", "Dimensions", "Assemblages", "Essence"] {
+                                ui.strong(h);
                             }
                             ui.end_row();
-                        }
-                    });
-                    ui.add_space(8.0);
-                    ui.heading("Assemblages");
-                    egui::Grid::new("sc_nom_asm").striped(true).show(ui, |ui| {
-                        for a in v["assemblages"].as_array().into_iter().flatten() {
-                            ui.label(a[0].as_str().unwrap_or(""));
-                            ui.label(a[1].to_string());
-                            ui.end_row();
-                        }
-                    });
-                    ui.add_space(8.0);
-                    ui.heading("Liste de matériel");
-                    egui::Grid::new("sc_nom_mat").striped(true).show(ui, |ui| {
-                        for h in ["Quantité", "Désignation", "Dimensions", "Opérations", "Essence"] {
-                            ui.strong(h);
-                        }
-                        ui.end_row();
-                        for r in v["materiel"].as_array().into_iter().flatten() {
-                            for k in ["quantite", "designation", "dimensions", "operations", "essence"] {
-                                ui.label(r[k].as_str().unwrap_or(""));
+                            for r in v["pieces"].as_array().into_iter().flatten() {
+                                ui.label(r["n"].to_string());
+                                ui.label(r["qte"].to_string());
+                                for k in ["designation", "dimensions", "assemblages", "essence"] {
+                                    ui.label(r[k].as_str().unwrap_or(""));
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.heading("Assemblages");
+                        egui::Grid::new("sc_nom_asm").striped(true).show(ui, |ui| {
+                            for a in v["assemblages"].as_array().into_iter().flatten() {
+                                ui.label(a[0].as_str().unwrap_or(""));
+                                ui.label(a[1].to_string());
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.heading("Liste de matériel");
+                        egui::Grid::new("sc_nom_mat").striped(true).show(ui, |ui| {
+                            for h in ["Quantité", "Désignation", "Dimensions", "Opérations", "Essence"] {
+                                ui.strong(h);
                             }
                             ui.end_row();
-                        }
+                            for r in v["materiel"].as_array().into_iter().flatten() {
+                                for k in ["quantite", "designation", "dimensions", "operations", "essence"] {
+                                    ui.label(r[k].as_str().unwrap_or(""));
+                                }
+                                ui.end_row();
+                            }
+                        });
                     });
-                });
+                }
+                Some(Err(e)) => {
+                    ui.label(egui::RichText::new(e).color(Color32::from_rgb(200, 60, 60)));
+                    ui.label("Créez un meuble (onglet Créer) pour établir sa nomenclature.");
+                }
+                None => {}
             }
-            Some(Err(e)) => {
-                ui.label(egui::RichText::new(e).color(Color32::from_rgb(200, 60, 60)));
-                ui.label("Créez un meuble (onglet Créer) pour établir sa nomenclature.");
-            }
-            None => {}
-        }
-    });
+        });
     if let Some(text) = copy {
         ctx.copy_text(text);
         n.message = Some("Copié.".into());
@@ -418,7 +440,8 @@ mod tests {
         let mut s = solidcraft_engine::Session::default();
         assert!(s.execute("scout.meuble.create", &json!({"type": "banc"})).is_ok());
         let v = s.execute("scout.atelier.dessin", &dessin_params(&Dessin::new(), &[])).unwrap_or_default();
-        let prims: Vec<Prim> = v["prims"].as_array().map(|a| a.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect()).unwrap_or_default();
+        let prims: Vec<Prim> =
+            v["prims"].as_array().map(|a| a.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect()).unwrap_or_default();
         assert!(prims.len() > 40, "{}", prims.len());
         assert_eq!(v["prims"].as_array().map(Vec::len), Some(prims.len()));
     }

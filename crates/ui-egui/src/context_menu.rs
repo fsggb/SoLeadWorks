@@ -412,14 +412,19 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             let (drawing, nomenclature) = (app.scout_win.dessin.is_some(), app.scout_win.nomen.is_some());
             let idle = app.session.active_sketch.is_none() && app.tool.is_none() && app.dialog.is_none() && !app.file_load.busy();
             vec![
-                act("ui.workspace.design", "Design", "ws_design")
-                    .with(json!({"workspace":"design"}))
-                    .key(if rendering || drawing || nomenclature { "" } else { "current" }),
+                act("ui.workspace.design", "Design", "ws_design").with(json!({"workspace":"design"})).key(if rendering || drawing || nomenclature {
+                    ""
+                } else {
+                    "current"
+                }),
                 act("ui.workspace.drawing", "Drawing", "scout_plan").with(json!({"workspace":"drawing"})).key(if drawing { "current" } else { "" }),
                 act("ui.workspace.nomenclature", "Nomenclature", "scout_nomenclature")
                     .with(json!({"workspace":"nomenclature"}))
                     .key(if nomenclature { "current" } else { "" }),
-                act("ui.workspace.render", "Render", "ws_render").with(json!({"workspace":"render"})).key(if rendering { "current" } else { "" }).on(idle),
+                act("ui.workspace.render", "Render", "ws_render")
+                    .with(json!({"workspace":"render"}))
+                    .key(if rendering { "current" } else { "" })
+                    .on(idle),
             ]
         }
         Target::Units => crate::prefs::UNITS
@@ -553,7 +558,49 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             item.children.push(cmd(app, "appearance.assign", "Remove override").with(targets));
         }
     }
+    if matches!(target, Target::Body { .. } | Target::Component { .. } | Target::Occurrence { .. }) {
+        v = court(v);
+    }
     v
+}
+
+/// SoLeadWorks : le menu du clic droit sur une pièce reste court, « Déplacer » en tête ; le reste
+/// est dans le ruban.
+fn court(v: Vec<Item>) -> Vec<Item> {
+    const DEPLACER: [&str; 3] = ["ui.moveOccurrence", "ui.moveBodies", "solid.move"];
+    const GARDER: [&str; 15] = [
+        "ui.rename",
+        "ui.copy",
+        "ui.paste",
+        "ui.delete",
+        "ui.hide",
+        "ui.show",
+        "browser.visibility",
+        "ui.isolate",
+        "ui.isolateOccurrence",
+        "ui.appearance",
+        "ui.properties",
+        "occurrence.ground",
+        "ui.activate",
+        "parts.resize",
+        "ui.edit",
+    ];
+    let (mut tete, mut reste) = (Vec::new(), Vec::new());
+    for mut item in v {
+        if DEPLACER.contains(&item.id.as_str()) {
+            if tete.is_empty() {
+                item.label = "Déplacer / tourner".into();
+                tete.push(item);
+            }
+        } else if GARDER.contains(&item.id.as_str()) || item.id.starts_with("scout.") {
+            reste.push(item);
+        }
+    }
+    if !tete.is_empty() && !reste.is_empty() {
+        tete.push(Item::sep());
+    }
+    tete.extend(reste);
+    tete
 }
 
 /// Resolve the picked face's creator, rather than the feature that first made its body.

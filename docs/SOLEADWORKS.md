@@ -46,6 +46,18 @@ listée, ni trouvée, ni exécutable, ni placée sur le ruban.
   propose d'inverser les pièces et d'ajouter une cheville au mi-bois.
 - Ateliers Dessin technique et Nomenclature : fenêtres alimentées par `scout.atelier.*`.
 
+## Ajouté en novembre 2026
+
+- **Clayonnage** (`scout.clayonnage`, onglet Créer, panneau Tressage et cordes) : claies tressées
+  alternativement sous et sur des supports parallèles choisis dans la vue, une claie sur deux inversée,
+  traverse fine ajoutée au milieu quand il n'y a que deux supports (sinon les claies tomberaient) ;
+  diamètre, pas (jointives par défaut), marge, longueur clayée, première claie dessus ou dessous.
+- **PH décoratif** (`scout.ph`) : cordes tendues entre deux traverses qui se rejoignent.
+- **Modifier après coup** : `modifier: <composant>` refait un clayonnage ou un PH avec de nouveaux
+  réglages (les anciens sont relus dans ses propriétés `scout_tissage`), en un seul pas d'annulation.
+- Meubles en **teinte bois**, thème **clair** par défaut, onglet **Plans** (dessin technique,
+  nomenclature, export HTML) sur le ruban, libellés de « Nouveau meuble » lisibles en entier.
+
 ## Reste à faire (par ordre d'utilité)
 
 1. **Boîte de dialogue « Nouveau meuble »** (type, dimensions, diamètres, position) : aujourd'hui le

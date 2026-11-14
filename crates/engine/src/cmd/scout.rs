@@ -19,11 +19,12 @@ use serde_json::{Value, json};
 
 use super::CommandSpec;
 use crate::params::{bad, num, str_, vec2, vec3};
-use crate::scout::models::{self, MODELS, Params};
 use crate::scout::dessin::{self, Cartouche, Format, Placed, SheetCfg, View};
+use crate::scout::models::{self, MODELS, Params};
 use crate::scout::nomenclature;
 use crate::scout::plan::{meuble_section, page_html, steps};
 use crate::scout::pole::{self, Build, End, MAX_POLES, Op, Pole, SplitMode, Style, TenonOpts, V3, cut_list, extent, joint_summary, wood_metres};
+use crate::scout::tissage;
 use crate::{EngineError, Result, Session};
 
 const P_POLE: &str = "scout_pole";
@@ -31,6 +32,8 @@ const P_KIND: &str = "scout_meuble";
 const P_PARAMS: &str = "scout_reglages";
 const P_PLACE: &str = "scout_place";
 const P_COIN: &str = "scout_coin";
+/// Réglages d'un clayonnage ou d'un PH (de quoi le refaire : « Modifier »).
+const P_TISSAGE: &str = "scout_tissage";
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("scout.meuble.types", "Modèles de meubles", |_, _| Ok(types())).icon("library").noundo().doc_only().params(
@@ -76,6 +79,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SCOUT", "PIÈCES")
         .icon("scout_filet")
         .params("long?, larg?: mm (default 1000 × 600); maille?: mm (default 30); z?: height mm; at?: [x, y]"),
+    CommandSpec::new("scout.clayonnage", "Clayonnage", |s, p| atomic(s, |c| clayonnage_cmd(c, p)))
+        .at("SCOUT", "PIÈCES")
+        .icon("scout_claies")
+        .params("supports: [pièces] (au moins 2 traverses parallèles, nom ou id); d?: Ø des claies mm (20); pas?: mm (0 = jointives); marge?: mm (10); debut?: mm (0); zone?: longueur clayée mm (0 = jusqu'au bout); debord?: mm (0, 5 au plus); dessus?: la première claie sur le premier support (false); milieu?: avec 2 supports, ajouter une traverse fine au milieu (true); dm?: son Ø mm (30); modifier?: un clayonnage existant à refaire avec ces réglages → component, claies, troncons, bois_m"),
+    CommandSpec::new("scout.plateau", "Plateau", |s, p| atomic(s, |c| plateau_cmd(c, p)))
+        .at("SCOUT", "PIÈCES")
+        .icon("scout_claies")
+        .params("a, b: les deux supports parallèles et horizontaux (nom ou id); garniture?: claies|planches (claies); d?: Ø des claies mm (20); ep?, largeur?: planches mm (25 × 100); jeu?: mm (0 claies, 3 planches); debut?, fin?: mm depuis chaque bout (0); quart?: tailler les quarts de bois (true); chevilles?: cheviller les planches (true); dp?: Ø des chevilles mm (10) → component, elements"),
+    CommandSpec::new("scout.ph", "PH (cordes)", |s, p| atomic(s, |c| ph_cmd(c, p)))
+        .at("SCOUT", "PIÈCES")
+        .icon("scout_filet")
+        .params("a, b: les deux traverses qui se rejoignent (nom ou id); n?: nombre de cordes (15); la?, lb?: longueur utilisée sur chaque traverse mm (0 = jusqu'au bout); d?: Ø de la corde mm (4); modifier?: un PH existant à refaire → component, cordes, corde_m"),
     CommandSpec::new("scout.profil.tube_rond", "Tube rond", |s, p| atomic(s, |c| piece_profil(c, &with_kind(p, "tube_rond")))).icon("cylinder").params("see scout.profil"),
     CommandSpec::new("scout.profil.tube_carre", "Tube carré", |s, p| atomic(s, |c| piece_profil(c, &with_kind(p, "tube_carre")))).icon("box").params("see scout.profil"),
     CommandSpec::new("scout.profil.corniere", "Cornière", |s, p| atomic(s, |c| piece_profil(c, &with_kind(p, "corniere")))).icon("box").params("see scout.profil"),
@@ -164,7 +179,9 @@ fn free_name(s: &Session, base: &str) -> String {
 fn component_id(s: &Session, v: &Value, cmd: &str) -> Result<u64> {
     match v {
         Value::Number(n) => n.as_u64().filter(|id| s.doc.components.iter().any(|c| c.id == *id)).ok_or_else(|| bad(cmd, "no such component")),
-        Value::String(name) => s.doc.components.iter().find(|c| c.name == *name).map(|c| c.id).ok_or_else(|| bad(cmd, format!("no component named `{name}`"))),
+        Value::String(name) => {
+            s.doc.components.iter().find(|c| c.name == *name).map(|c| c.id).ok_or_else(|| bad(cmd, format!("no component named `{name}`")))
+        }
         _ => Err(bad(cmd, "a component is an id or a name")),
     }
 }
@@ -180,12 +197,35 @@ fn name_of(s: &Session, id: u64) -> String {
 fn piece(s: &Session, p: &Value, key: &str, cmd: &str) -> Result<(u64, Pole)> {
     let v = p.get(key).filter(|v| !v.is_null()).ok_or_else(|| bad(cmd, format!("`{key}` is required: a pole (component name or id)")))?;
     let id = component_id(s, v, cmd)?;
-    let pole = pole_of(s, id).ok_or_else(|| bad(cmd, format!("`{key}` is not a pole made by SoLeadWorks (a furniture's pole, a Traverse…)")))?;
+    let mut pole = pole_of(s, id).ok_or_else(|| bad(cmd, format!("`{key}` is not a pole made by SoLeadWorks (a furniture's pole, a Traverse…)")))?;
+    suivre_placement(s, id, &mut pole);
     Ok((id, pole))
 }
 
+/// Une perche déplacée ou tournée depuis sa création : son repère se relit sur son placement actuel
+/// (les assemblages se calculent là où la pièce est vraiment, pas là où elle a été créée).
+fn suivre_placement(s: &Session, id: u64, pole: &mut Pole) {
+    let Ok(pl) = s.occurrence_placement(&s.doc.first_path(id)) else { return };
+    let m = pl.local;
+    let col = |c: usize| [m[c][0], m[c][1], m[c][2]];
+    let (x, z, o) = (col(0), col(2), col(3));
+    let ok = |v: V3| v.iter().all(|t| t.is_finite());
+    let lz = (z[0] * z[0] + z[1] * z[1] + z[2] * z[2]).sqrt();
+    let lx = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+    if !ok(x) || !ok(z) || !ok(o) || lz < 1e-9 || lx < 1e-9 {
+        return;
+    }
+    pole.origin = o;
+    pole.dir = [z[0] / lz, z[1] / lz, z[2] / lz];
+    pole.up = [x[0] / lx, x[1] / lx, x[2] / lx];
+}
+
 fn part_number(kind: &str, pole: &Pole) -> String {
-    let size = if pole.width > 0.0 { format!("{}x{}x{}", pole.diameter, pole.width, pole.length.round()) } else { format!("{}x{}", pole.diameter, pole.length.round()) };
+    let size = if pole.width > 0.0 {
+        format!("{}x{}x{}", pole.diameter, pole.width, pole.length.round())
+    } else {
+        format!("{}x{}", pole.diameter, pole.length.round())
+    };
     format!("{}-{}-{}", kind.to_uppercase(), pole.role.to_uppercase().replace([' ', '\''], "_"), size)
 }
 
@@ -372,7 +412,8 @@ fn apply_op(s: &mut Session, name: &str, pole: &Pole, op: &Op) -> Result<()> {
             }
         }
         Op::CutOff { end, at } => {
-            let (zc, hz) = if *end == End::End { (at + pole.length + 10.0, pole.length + 10.0) } else { (at - pole.length - 10.0, pole.length + 10.0) };
+            let (zc, hz) =
+                if *end == End::End { (at + pole.length + 10.0, pole.length + 10.0) } else { (at - pole.length - 10.0, pole.length + 10.0) };
             let tool = tool_name(name);
             tool_box(s, &tool, [0.0, 0.0, zc], [big, big, hz])?;
             combine(s, name, &tool, "cut")?;
@@ -402,7 +443,22 @@ fn apply_op(s: &mut Session, name: &str, pole: &Pole, op: &Op) -> Result<()> {
 
 fn dominant(v: V3) -> usize {
     let a = v.map(f64::abs);
-    if a[0] >= a[1] && a[0] >= a[2] { 0 } else if a[1] >= a[2] { 1 } else { 2 }
+    if a[0] >= a[1] && a[0] >= a[2] {
+        0
+    } else if a[1] >= a[2] {
+        1
+    } else {
+        2
+    }
+}
+
+/// Teinte bois des perches (CathIA) : sans elle, SolidCraft montre le gris métal de son matériau par défaut.
+const BOIS: [u8; 3] = [214, 164, 104];
+
+/// Peint en bois le composant d'un meuble ou d'une pièce (ses perches en héritent). Une teinte refusée
+/// ne doit pas empêcher de construire le meuble : l'erreur est ignorée.
+fn en_bois(s: &mut Session, comp: u64) {
+    let _ = run(s, "appearance.assign", json!({"components": [comp.to_string()], "color": BOIS}));
 }
 
 /// Makes the component of one pole under `parent`, builds and places it, saves its record.
@@ -411,9 +467,17 @@ fn make_pole(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &Pole) 
     let (comp, occ) = (id_of(&c, "component"), id_of(&c, "occurrence"));
     let (z0, z1) = pole.built_range();
     if pole.width > 0.0 {
-        run(s, "solid.box", json!({"corner": [-pole.diameter / 2.0, -pole.width / 2.0, z0], "length": pole.diameter, "width": pole.width, "height": z1 - z0, "body_name": name}))?;
+        run(
+            s,
+            "solid.box",
+            json!({"corner": [-pole.diameter / 2.0, -pole.width / 2.0, z0], "length": pole.diameter, "width": pole.width, "height": z1 - z0, "body_name": name}),
+        )?;
     } else {
-        run(s, "solid.cylinder", json!({"base": [0.0, 0.0, z0], "axis": [0.0, 0.0, 1.0], "diameter": pole.diameter, "height": z1 - z0, "body_name": name}))?;
+        run(
+            s,
+            "solid.cylinder",
+            json!({"base": [0.0, 0.0, z0], "axis": [0.0, 0.0, 1.0], "diameter": pole.diameter, "height": z1 - z0, "body_name": name}),
+        )?;
     }
     for op in pole.ops.iter().filter(|o| !matches!(o, Op::Saddle { .. })) {
         apply_op(s, name, pole, op)?;
@@ -495,7 +559,11 @@ fn rotation_of(cmd: &str, p: &Value) -> Result<f64> {
 fn coin_param(s: &Session, p: &Value, cmd: &str) -> Result<Option<u64>> {
     let Some(v) = p.get("coin").filter(|v| !v.is_null()) else { return Ok(None) };
     let c = component_id(s, v, cmd)?;
-    if s.doc.components.iter().any(|x| x.id == c && x.properties.contains_key(P_COIN)) { Ok(Some(c)) } else { Err(bad(cmd, "`coin` is not a patrol corner (scout.coin.create)")) }
+    if s.doc.components.iter().any(|x| x.id == c && x.properties.contains_key(P_COIN)) {
+        Ok(Some(c))
+    } else {
+        Err(bad(cmd, "`coin` is not a patrol corner (scout.coin.create)"))
+    }
 }
 
 fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
@@ -522,6 +590,7 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
         comps.push((pc, part));
     }
     fit_saddles(s, &kind, &comps, &mut poles)?;
+    en_bois(s, comp);
     let (x, y) = at.map_or((0.0, 0.0), |v| (v.x, v.y));
     run(
         s,
@@ -530,7 +599,11 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
     )?;
     if at.is_some() || rotation != 0.0 {
         let (c, sn) = (rotation.to_radians().cos().round(), rotation.to_radians().sin().round());
-        run(s, "occurrence.move", json!({"occurrence": occ, "matrix": [c, -sn, 0.0, x, sn, c, 0.0, y, 0.0, 0.0, 1.0, 0.0], "capture": true, "move_grounded": true}))?;
+        run(
+            s,
+            "occurrence.move",
+            json!({"occurrence": occ, "matrix": [c, -sn, 0.0, x, sn, c, 0.0, y, 0.0, 0.0, 1.0, 0.0], "capture": true, "move_grounded": true}),
+        )?;
     }
     run(s, "component.activate", json!({"component": active}))?;
     Ok(json!({
@@ -540,7 +613,10 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn rows_json(poles: &[Pole]) -> Vec<Value> {
-    cut_list(poles).iter().map(|r| json!({"role": r.role, "count": r.count, "diameter": r.diameter, "width": r.width, "length": r.length, "cut_length": r.cut_length})).collect()
+    cut_list(poles)
+        .iter()
+        .map(|r| json!({"role": r.role, "count": r.count, "diameter": r.diameter, "width": r.width, "length": r.length, "cut_length": r.cut_length}))
+        .collect()
 }
 
 fn joints_json(poles: &[Pole]) -> Vec<Value> {
@@ -548,7 +624,13 @@ fn joints_json(poles: &[Pole]) -> Vec<Value> {
 }
 
 /// The standard corner: a table with a bench on each long side, a shelving and a prep table.
-const STANDARD: &[(&str, f64, f64, f64)] = &[("table", 0.0, 0.0, 0.0), ("banc", 150.0, -400.0, 0.0), ("banc", 150.0, 950.0, 0.0), ("etagere", 2000.0, 0.0, 0.0), ("prepa", 2000.0, 700.0, 0.0)];
+const STANDARD: &[(&str, f64, f64, f64)] = &[
+    ("table", 0.0, 0.0, 0.0),
+    ("banc", 150.0, -400.0, 0.0),
+    ("banc", 150.0, 950.0, 0.0),
+    ("etagere", 2000.0, 0.0, 0.0),
+    ("prepa", 2000.0, 700.0, 0.0),
+];
 
 fn create_coin(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "scout.coin.create";
@@ -599,7 +681,13 @@ fn update_pole(s: &mut Session, comp: u64, old: &Pole, new: &Pole) -> Result<usi
     }
     let parent = s.doc.components.iter().find(|c| c.id == comp).map_or(0, |c| c.parent);
     run(s, "component.activate", json!({"component": parent}))?;
-    let kind = s.doc.components.iter().find(|c| c.id == comp).and_then(|c| c.metadata.get("part_number").and_then(|v| v.as_str().map(str::to_string))).unwrap_or_default();
+    let kind = s
+        .doc
+        .components
+        .iter()
+        .find(|c| c.id == comp)
+        .and_then(|c| c.metadata.get("part_number").and_then(|v| v.as_str().map(str::to_string)))
+        .unwrap_or_default();
     let kind = kind.split('-').next().unwrap_or("PIECE").to_string();
     save_pole(s, comp, &kind, new)?;
     Ok(ops.len())
@@ -625,7 +713,8 @@ fn style_of(kind: &str) -> Option<(Style, bool)> {
 
 fn assemblage(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "scout.assemblage";
-    let kind = str_(p, "kind").ok_or_else(|| bad(cmd, "`kind` is required (mibois, hache, scie, plat, platscie, aronde1, aronde2, aronde3, cheville, brelage)"))?;
+    let kind = str_(p, "kind")
+        .ok_or_else(|| bad(cmd, "`kind` is required (mibois, hache, scie, plat, platscie, aronde1, aronde2, aronde3, cheville, brelage)"))?;
     let (ia, a) = piece(s, p, "a", cmd)?;
     let (ib, b) = piece(s, p, "b", cmd)?;
     if ia == ib {
@@ -728,8 +817,13 @@ fn loose(s: &mut Session, name: &str, kind: &str, poles: &[Pole], at: Option<V3>
     for (i, pole) in poles.iter().enumerate() {
         make_pole(s, comp, kind, &format!("{} {} {}", pole.role, i + 1, name), pole)?;
     }
+    en_bois(s, comp);
     if let Some(a) = at {
-        run(s, "occurrence.move", json!({"occurrence": occ, "matrix": [1.0, 0.0, 0.0, a[0], 0.0, 1.0, 0.0, a[1], 0.0, 0.0, 1.0, a[2]], "capture": true, "move_grounded": true}))?;
+        run(
+            s,
+            "occurrence.move",
+            json!({"occurrence": occ, "matrix": [1.0, 0.0, 0.0, a[0], 0.0, 1.0, 0.0, a[1], 0.0, 0.0, 1.0, a[2]], "capture": true, "move_grounded": true}),
+        )?;
     }
     run(s, "component.activate", json!({"component": active}))?;
     Ok(json!({"component": comp, "name": name, "poles": poles.len()}))
@@ -738,7 +832,10 @@ fn loose(s: &mut Session, name: &str, kind: &str, poles: &[Pole], at: Option<V3>
 fn bounded(cmd: &str, p: &Value, key: &str, default: f64, lo: f64, hi: f64) -> Result<f64> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(default),
-        Some(v) => v.as_f64().filter(|x| x.is_finite() && (lo..=hi).contains(x)).ok_or_else(|| bad(cmd, format!("`{key}` must be a number between {lo} and {hi}"))),
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.is_finite() && (lo..=hi).contains(x))
+            .ok_or_else(|| bad(cmd, format!("`{key}` must be a number between {lo} and {hi}"))),
     }
 }
 
@@ -826,6 +923,271 @@ fn piece_filet(s: &mut Session, p: &Value) -> Result<Value> {
     loose(s, "Filet de ficelle", "FILET", &poles, None)
 }
 
+// ---- clayonnage et PH -------------------------------------------------------------------------------
+
+/// Les pièces `ids`, dans le repère où les construire : celui de leur parent commun (aucune conversion),
+/// sinon le monde (parent 0).
+fn pieces_communes(s: &Session, ids: &[u64]) -> (u64, Vec<Pole>) {
+    let parents: Vec<u64> = ids.iter().map(|id| s.doc.components.iter().find(|c| c.id == *id).map_or(0, |c| c.parent)).collect();
+    let poles: Vec<Pole> = ids.iter().filter_map(|id| pole_of(s, *id)).collect();
+    if parents.windows(2).all(|w| w[0] == w[1]) {
+        return (parents.first().copied().unwrap_or(0), poles);
+    }
+    let monde = |parent: u64, p: &Pole| -> Pole {
+        let frame = if parent == 0 { None } else { s.occurrence_placement(&s.doc.first_path(parent)).ok().map(|o| o.world) };
+        let Some(f) = frame else { return p.clone() };
+        let pt = |v: V3| {
+            let q = solidcraft_doc::apply_point(&f, solidcraft_geom::Vec3::new(v[0], v[1], v[2]));
+            [q.x, q.y, q.z]
+        };
+        let vec = |v: V3| {
+            let q = solidcraft_doc::apply_vector(&f, solidcraft_geom::Vec3::new(v[0], v[1], v[2]));
+            pole::norm([q.x, q.y, q.z])
+        };
+        Pole { origin: pt(p.origin), dir: vec(p.dir), up: vec(p.up), ..p.clone() }
+    };
+    (0, parents.iter().zip(&poles).map(|(pa, p)| monde(*pa, p)).collect())
+}
+
+/// Les réglages enregistrés d'un clayonnage ou d'un PH (`modifier`), complétés par ceux donnés : de quoi
+/// le refaire. Le composant ancien est supprimé ; le nouveau garde son nom.
+fn reprendre(s: &mut Session, p: &Value, cmd: &str, genre: &str) -> Result<(Value, Option<String>)> {
+    let Some(m) = p.get("modifier").filter(|v| !v.is_null()) else { return Ok((p.clone(), None)) };
+    let id = component_id(s, m, cmd)?;
+    let ancien: Value = s
+        .doc
+        .components
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.properties.get(P_TISSAGE))
+        .and_then(|t| serde_json::from_str(t).ok())
+        .filter(|v: &Value| v.get("genre").and_then(Value::as_str) == Some(genre))
+        .ok_or_else(|| bad(cmd, format!("« {} » n'est pas un {genre} fait par SoLeadWorks", name_of(s, id))))?;
+    let mut r = ancien.clone();
+    if let (Some(o), Some(n)) = (r.as_object_mut(), p.as_object()) {
+        for (k, v) in n {
+            if k != "modifier" {
+                o.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let nom = name_of(s, id);
+    run(s, "component.delete", json!({"component": id}))?;
+    Ok((r, Some(nom)))
+}
+
+/// Construit les tronçons (un cylindre chacun) dans un nouveau composant sous `parent`.
+fn construire_troncons(s: &mut Session, parent: u64, nom: &str, groupes: &[Vec<tissage::Troncon>], etiquette: &str) -> Result<u64> {
+    let total: usize = groupes.iter().map(Vec::len).sum();
+    if total > 600 {
+        return Err(e(format!("{total} tronçons : trop pour être construits (augmentez le pas)")));
+    }
+    let active = s.active_component;
+    let c = run(s, "component.create", json!({"name": nom, "parent": parent, "grounded": false}))?;
+    let comp = id_of(&c, "component");
+    for (i, g) in groupes.iter().enumerate() {
+        for (j, t) in g.iter().enumerate() {
+            let axe = pole::sub(t.b, t.a);
+            let h = pole::len(axe);
+            if h < 1.0 {
+                continue;
+            }
+            let (base, dir) = (world_point(s, t.a), world_dir(s, pole::norm(axe)));
+            let corps = if g.len() > 1 {
+                format!("{etiquette} {} {} {}", i + 1, (b'a' + (j % 26) as u8) as char, nom)
+            } else {
+                format!("{etiquette} {} {}", i + 1, nom)
+            };
+            run(s, "solid.cylinder", json!({"base": base, "axis": dir, "diameter": t.d, "height": h, "body_name": corps}))?;
+        }
+    }
+    run(s, "component.activate", json!({"component": active}))?;
+    Ok(comp)
+}
+
+/// Chaque claie d'un seul tenant : une esquisse 3D avec la spline qui passe par ses points, puis un tube
+/// de son diamètre le long de cette spline (la claie ondule sur et sous les supports, sans cassure).
+fn construire_claies(s: &mut Session, parent: u64, nom: &str, claies: &[tissage::Claie]) -> Result<u64> {
+    let active = s.active_component;
+    let c = run(s, "component.create", json!({"name": nom, "parent": parent, "grounded": false}))?;
+    let comp = id_of(&c, "component");
+    for (i, claie) in claies.iter().enumerate() {
+        let esquisse = format!("Claie {} {nom}", i + 1);
+        let points: Vec<V3> = claie.points.iter().map(|p| world_point(s, *p)).collect();
+        run(s, "sketch.create", json!({"plane": "XY", "name": esquisse}))?;
+        run(s, "sketch.options", json!({"sketch_3d": true}))?;
+        let r = run(s, "sketch.spline3d", json!({"points": points}))?;
+        run(s, "sketch.finish", json!({}))?;
+        let courbes = r.get("curves").cloned().unwrap_or_else(|| json!([]));
+        run(s, "solid.pipe", json!({"path_sketch": esquisse, "path": courbes, "diameter": claie.d, "body_name": esquisse}))?;
+    }
+    run(s, "component.activate", json!({"component": active}))?;
+    Ok(comp)
+}
+
+fn liste_pieces(s: &Session, p: &Value, cle: &str, cmd: &str) -> Result<Vec<u64>> {
+    let v = p.get(cle).and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("`{cle}` : la liste des pièces (au moins deux)")))?;
+    let mut ids = Vec::new();
+    for x in v {
+        let id = component_id(s, x, cmd)?;
+        if pole_of(s, id).is_none() {
+            return Err(bad(cmd, format!("« {} » n'est pas une pièce faite par SoLeadWorks", name_of(s, id))));
+        }
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn clayonnage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "scout.clayonnage";
+    let (p, ancien_nom) = reprendre(s, p, cmd, "clayonnage")?;
+    let ids = liste_pieces(s, &p, "supports", cmd)?;
+    if ids.len() < 2 {
+        return Err(bad(cmd, "choisissez au moins deux supports (des traverses parallèles)"));
+    }
+    let o = tissage::Clayonnage {
+        d: num(&p, "d").unwrap_or(20.0),
+        pas: num(&p, "pas").unwrap_or(0.0),
+        marge: num(&p, "marge").unwrap_or(10.0),
+        debut: num(&p, "debut").unwrap_or(0.0),
+        zone: num(&p, "zone").unwrap_or(0.0),
+        debord: num(&p, "debord").unwrap_or(0.0),
+        dessus: p.get("dessus").and_then(Value::as_bool).unwrap_or(false),
+    };
+    if [o.d, o.pas, o.marge, o.debut, o.zone, o.debord].iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err(bad(cmd, "les longueurs sont des nombres positifs"));
+    }
+    let (parent, mut supports) = pieces_communes(s, &ids);
+    let nom = ancien_nom.unwrap_or_else(|| free_name(s, "Clayonnage"));
+    // deux supports seulement : une traverse fine au milieu, sinon les claies ne seraient pas tordues des
+    // deux côtés et tomberaient (CathIA)
+    let milieu = supports.len() == 2 && p.get("milieu").and_then(Value::as_bool).unwrap_or(true);
+    let mut fine = None;
+    if milieu {
+        let dm = num(&p, "dm").unwrap_or(30.0);
+        if !(10.0..=120.0).contains(&dm) {
+            return Err(bad(cmd, "la traverse fine du milieu fait de 10 à 120 mm de diamètre"));
+        }
+        let (a, b) = (&supports[0], &supports[1]);
+        let mid = |x: V3, y: V3| pole::mul(pole::add(x, y), 0.5);
+        let (pa, pb) = (mid(a.p_start(), b.p_start()), mid(a.end(), b.end()));
+        let t = Pole::bar("traverse fine", dm, pa, pb);
+        supports.push(t.clone());
+        fine = Some(t);
+    }
+    let claies = tissage::clayonnage(&supports, &o).map_err(|m| bad(cmd, m))?;
+    let comp = construire_claies(s, parent, &nom, &claies)?;
+    if let Some(t) = &fine {
+        let part = format!("traverse fine {nom}");
+        make_pole(s, comp, "CLAYONNAGE", &part, t)?;
+    }
+    en_bois(s, comp);
+    let mut reglages = p.clone();
+    if let Some(o) = reglages.as_object_mut() {
+        o.insert("genre".into(), json!("clayonnage"));
+        o.insert("supports".into(), json!(ids.iter().map(|i| name_of(s, *i)).collect::<Vec<_>>()));
+        o.remove("modifier");
+    }
+    let n = claies.len();
+    let bois: f64 = claies.iter().map(|c| c.points.windows(2).map(|w| pole::len(pole::sub(w[1], w[0]))).sum::<f64>()).sum::<f64>() / 1000.0;
+    run(
+        s,
+        "component.metadata.set",
+        json!({"component": comp, "description": format!("Clayonnage : {n} claies Ø {} mm", o.d), "properties": {P_TISSAGE: reglages.to_string()}}),
+    )?;
+    Ok(json!({"component": comp, "name": nom, "claies": n, "bois_m": (bois * 100.0).round() / 100.0, "traverse_fine": fine.is_some()}))
+}
+
+fn plateau_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "scout.plateau";
+    let (ia, a) = piece(s, p, "a", cmd)?;
+    let (ib, b) = piece(s, p, "b", cmd)?;
+    if ia == ib {
+        return Err(bad(cmd, "choisissez deux supports différents"));
+    }
+    let parents: Vec<u64> = [ia, ib].iter().map(|id| s.doc.components.iter().find(|c| c.id == *id).map_or(0, |c| c.parent)).collect();
+    if parents[0] != parents[1] {
+        return Err(bad(cmd, "les deux supports doivent appartenir au même meuble (ou être deux traverses libres)"));
+    }
+    let planches = match str_(p, "garniture").unwrap_or("claies") {
+        "claies" => false,
+        "planches" => true,
+        other => return Err(bad(cmd, format!("garniture `{other}` : claies ou planches"))),
+    };
+    let o = tissage::Plateau {
+        garniture: if planches { tissage::Garniture::Planches } else { tissage::Garniture::Claies },
+        d: num(p, "d").unwrap_or(20.0),
+        ep: num(p, "ep").unwrap_or(25.0),
+        largeur: num(p, "largeur").unwrap_or(100.0),
+        jeu: num(p, "jeu").unwrap_or(if planches { 3.0 } else { 0.0 }),
+        debut: num(p, "debut").unwrap_or(0.0),
+        fin: num(p, "fin").unwrap_or(0.0),
+        quart: p.get("quart").and_then(Value::as_bool).unwrap_or(true),
+        chevilles: p.get("chevilles").and_then(Value::as_bool).unwrap_or(true),
+        dp: num(p, "dp").unwrap_or(10.0),
+    };
+    let (oa, ob) = (a.clone(), b.clone());
+    let mut build = Build { poles: vec![a, b] };
+    let n = tissage::plateau(&mut build, 0, 1, &o).map_err(|m| bad(cmd, m))?;
+    update_pole(s, ia, &oa, &build.poles[0])?;
+    update_pole(s, ib, &ob, &build.poles[1])?;
+    // les éléments et les chevilles, dans un composant « Plateau » à côté des supports
+    let nom = free_name(s, if planches { "Plateau de planches" } else { "Plateau de claies" });
+    let active = s.active_component;
+    let top = run(s, "component.create", json!({"name": nom, "parent": parents[0], "grounded": false}))?;
+    let comp = id_of(&top, "component");
+    let mut compte = std::collections::BTreeMap::<String, usize>::new();
+    for pole in build.poles.iter().skip(2) {
+        let k = compte.entry(pole.role.clone()).or_insert(0);
+        *k += 1;
+        make_pole(s, comp, if planches { "PLANCHES" } else { "CLAIES" }, &format!("{} {} {nom}", pole.role, k), pole)?;
+    }
+    en_bois(s, comp);
+    run(s, "component.activate", json!({"component": active}))?;
+    Ok(json!({"component": comp, "name": nom, "elements": n, "chevilles": compte.get("cheville").copied().unwrap_or(0)}))
+}
+
+fn ph_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "scout.ph";
+    let (p, ancien_nom) = reprendre(s, p, cmd, "PH")?;
+    let (ia, _) = piece(s, &p, "a", cmd)?;
+    let (ib, _) = piece(s, &p, "b", cmd)?;
+    if ia == ib {
+        return Err(bad(cmd, "choisissez deux traverses différentes"));
+    }
+    let n = num(&p, "n").unwrap_or(15.0);
+    if !n.is_finite() || n.fract() != 0.0 {
+        return Err(bad(cmd, "`n` : un nombre entier de cordes"));
+    }
+    let (la, lb, d) = (num(&p, "la").unwrap_or(0.0), num(&p, "lb").unwrap_or(0.0), num(&p, "d").unwrap_or(4.0));
+    if ![la, lb, d].iter().all(|v| v.is_finite() && *v >= 0.0) {
+        return Err(bad(cmd, "les longueurs sont des nombres positifs"));
+    }
+    let (parent, poles) = pieces_communes(s, &[ia, ib]);
+    let (Some(a), Some(b)) = (poles.first(), poles.get(1)) else { return Err(bad(cmd, "les deux traverses sont introuvables")) };
+    let cordes = tissage::ph(a, b, n.clamp(0.0, 1000.0) as usize, la, lb, d).map_err(|m| bad(cmd, m))?;
+    let nom = ancien_nom.unwrap_or_else(|| free_name(s, "PH"));
+    let groupes: Vec<Vec<tissage::Troncon>> = cordes.iter().cloned().map(|t| vec![t]).collect();
+    let comp = construire_troncons(s, parent, &nom, &groupes, "Corde")?;
+    let _ = run(s, "appearance.assign", json!({"components": [comp.to_string()], "color": [196, 178, 132]}));
+    let mut reglages = p.clone();
+    if let Some(o) = reglages.as_object_mut() {
+        o.insert("genre".into(), json!("PH"));
+        o.insert("a".into(), json!(name_of(s, ia)));
+        o.insert("b".into(), json!(name_of(s, ib)));
+        o.remove("modifier");
+    }
+    let corde: f64 = cordes.iter().map(|t| pole::len(pole::sub(t.b, t.a))).sum::<f64>() / 1000.0;
+    run(
+        s,
+        "component.metadata.set",
+        json!({"component": comp, "description": format!("PH décoratif : {} cordes", cordes.len()), "properties": {P_TISSAGE: reglages.to_string()}}),
+    )?;
+    Ok(json!({"component": comp, "name": nom, "cordes": cordes.len(), "corde_m": (corde * 100.0).round() / 100.0}))
+}
+
 // ---- reading back, plans and the HTML page -----------------------------------------------------
 
 /// A furniture read back from the design.
@@ -845,7 +1207,14 @@ fn read_meuble(s: &Session, id: u64) -> Option<Meuble> {
         [x, y, r] => (*x, *y, *r),
         _ => (0.0, 0.0, 0.0),
     };
-    let poles = s.doc.components.iter().filter(|k| k.parent == id).filter_map(|k| k.properties.get(P_POLE)).filter_map(|rec| serde_json::from_str(rec).ok()).collect();
+    let poles = s
+        .doc
+        .components
+        .iter()
+        .filter(|k| k.parent == id)
+        .filter_map(|k| k.properties.get(P_POLE))
+        .filter_map(|rec| serde_json::from_str(rec).ok())
+        .collect();
     Some(Meuble { id, name: c.name.clone(), kind, place, poles })
 }
 
@@ -853,7 +1222,11 @@ fn pick(s: &Session, p: &Value, key: &str, prop: &str, what: &str, cmd: &str) ->
     match p.get(key).filter(|v| !v.is_null()) {
         Some(v) => {
             let id = component_id(s, v, cmd)?;
-            if s.doc.components.iter().any(|c| c.id == id && c.properties.contains_key(prop)) { Ok(id) } else { Err(bad(cmd, format!("`{key}` is not a {what}"))) }
+            if s.doc.components.iter().any(|c| c.id == id && c.properties.contains_key(prop)) {
+                Ok(id)
+            } else {
+                Err(bad(cmd, format!("`{key}` is not a {what}")))
+            }
         }
         None => {
             let all: Vec<u64> = s.doc.components.iter().filter(|c| c.properties.contains_key(prop)).map(|c| c.id).collect();
@@ -867,7 +1240,10 @@ fn pick(s: &Session, p: &Value, key: &str, prop: &str, what: &str, cmd: &str) ->
 }
 
 fn author(s: &Session, p: &Value) -> String {
-    str_(p, "author").map(str::to_string).or_else(|| s.doc.metadata.get("author").and_then(|v| v.as_str().map(str::to_string))).unwrap_or_else(|| "—".into())
+    str_(p, "author")
+        .map(str::to_string)
+        .or_else(|| s.doc.metadata.get("author").and_then(|v| v.as_str().map(str::to_string)))
+        .unwrap_or_else(|| "—".into())
 }
 
 fn write_text(path: &str, ext: &str, text: &str) -> Result<()> {
@@ -883,11 +1259,28 @@ fn model_name(kind: &str) -> String {
 
 fn placed_of(m: &Meuble) -> Placed {
     let x = extent(&m.poles);
-    Placed { name: m.name.clone(), kind: model_name(&m.kind), x: m.place.0, y: m.place.1, length: x[0], width: x[1], rotation: m.place.2, wood_m: wood_metres(&m.poles) }
+    Placed {
+        name: m.name.clone(),
+        kind: model_name(&m.kind),
+        x: m.place.0,
+        y: m.place.1,
+        length: x[0],
+        width: x[1],
+        rotation: m.place.2,
+        wood_m: wood_metres(&m.poles),
+    }
 }
 
 fn coin_meubles(s: &Session, coin: u64) -> Vec<Meuble> {
-    s.doc.components.iter().filter(|c| c.parent == coin && c.properties.contains_key(P_KIND)).map(|c| c.id).collect::<Vec<_>>().into_iter().filter_map(|id| read_meuble(s, id)).collect()
+    s.doc
+        .components
+        .iter()
+        .filter(|c| c.parent == coin && c.properties.contains_key(P_KIND))
+        .map(|c| c.id)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|id| read_meuble(s, id))
+        .collect()
 }
 
 fn bool_p(p: &Value, k: &str, default: bool) -> bool {
@@ -934,7 +1327,8 @@ fn sheet_cfg(s: &Session, p: &Value, titre: &str) -> Result<SheetCfg> {
 fn dessin_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "scout.atelier.dessin";
     let has = |prop: &str| s.doc.components.iter().filter(|c| c.properties.contains_key(prop)).count();
-    let coin_wanted = p.get("coin").is_some_and(|v| !v.is_null()) || (p.get("meuble").is_none_or(Value::is_null) && has(P_KIND) == 0 && has(P_COIN) == 1);
+    let coin_wanted =
+        p.get("coin").is_some_and(|v| !v.is_null()) || (p.get("meuble").is_none_or(Value::is_null) && has(P_KIND) == 0 && has(P_COIN) == 1);
     if coin_wanted {
         let coin = pick(s, p, "coin", P_COIN, "patrol corner", cmd)?;
         let name = name_of(s, coin);
@@ -945,7 +1339,9 @@ fn dessin_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(path) = str_(p, "path") {
             write_text(path, ".svg", &svg)?;
         }
-        return Ok(json!({"name": name, "sujet": "coin", "svg": svg, "sheet": {"w": sheet.w, "h": sheet.h, "echelle": sheet.den}, "prims": sheet.prims, "meubles": placed.iter().map(|x| x.name.clone()).collect::<Vec<_>>()}));
+        return Ok(
+            json!({"name": name, "sujet": "coin", "svg": svg, "sheet": {"w": sheet.w, "h": sheet.h, "echelle": sheet.den}, "prims": sheet.prims, "meubles": placed.iter().map(|x| x.name.clone()).collect::<Vec<_>>()}),
+        );
     }
     let id = pick(s, p, "meuble", P_KIND, "furniture", cmd)?;
     let m = read_meuble(s, id).ok_or_else(|| bad(cmd, "this furniture's record is unreadable"))?;
@@ -977,7 +1373,13 @@ fn all_poles(s: &Session, root: Option<u64>) -> Vec<Pole> {
             _ => return false,
         }
     };
-    s.doc.components.iter().filter(|c| root.is_none_or(|r| under(c.id, r))).filter_map(|c| c.properties.get(P_POLE)).filter_map(|t| serde_json::from_str(t).ok()).collect()
+    s.doc
+        .components
+        .iter()
+        .filter(|c| root.is_none_or(|r| under(c.id, r)))
+        .filter_map(|c| c.properties.get(P_POLE))
+        .filter_map(|t| serde_json::from_str(t).ok())
+        .collect()
 }
 
 fn nomenclature_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1018,7 +1420,9 @@ fn piece_profil(s: &mut Session, p: &Value) -> Result<Value> {
             "Z" => [0.0, 0.0, 1.0],
             _ => return Err(bad(cmd, "`dir` is X, Y, Z or [x, y, z]")),
         },
-        Some(v) => vec3(v).map(|q| [q.x, q.y, q.z]).filter(|q| pole::len(*q) > 1e-6).ok_or_else(|| bad(cmd, "`dir` is X, Y, Z or [x, y, z], not zero"))?,
+        Some(v) => {
+            vec3(v).map(|q| [q.x, q.y, q.z]).filter(|q| pole::len(*q) > 1e-6).ok_or_else(|| bad(cmd, "`dir` is X, Y, Z or [x, y, z], not zero"))?
+        }
     };
     let at = at_of(cmd, p)?.unwrap_or([0.0, 0.0, size / 2.0]);
     let label = match kind {
@@ -1049,7 +1453,11 @@ fn piece_profil(s: &mut Session, p: &Value) -> Result<Value> {
     match kind {
         "tube_rond" => {
             run(s, "solid.cylinder", json!({"base": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0], "diameter": size, "height": l, "body_name": name}))?;
-            run(s, "solid.cylinder", json!({"base": [0.0, 0.0, -1.0], "axis": [0.0, 0.0, 1.0], "diameter": size - 2.0 * t, "height": l + 2.0, "operation": "cut", "targets": target}))?;
+            run(
+                s,
+                "solid.cylinder",
+                json!({"base": [0.0, 0.0, -1.0], "axis": [0.0, 0.0, 1.0], "diameter": size - 2.0 * t, "height": l + 2.0, "operation": "cut", "targets": target}),
+            )?;
         }
         "tube_carre" => {
             bx(s, [-h, -h, 0.0], [size, size, l], "new")?;
@@ -1072,7 +1480,11 @@ fn piece_profil(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let pole = Pole::bar("profilé", size, at, pole::add(at, pole::mul(pole::norm(dir), l)));
     run(s, "occurrence.move", json!({"occurrence": occ, "matrix": pole.matrix(), "capture": true, "move_grounded": true}))?;
-    run(s, "component.metadata.set", json!({"component": comp, "part_number": format!("PROFIL-{}-{}x{}", kind.to_uppercase(), size, l), "description": format!("{label} {size} × {l} mm, paroi {t}"), "properties": {"essence": "métal"}}))?;
+    run(
+        s,
+        "component.metadata.set",
+        json!({"component": comp, "part_number": format!("PROFIL-{}-{}x{}", kind.to_uppercase(), size, l), "description": format!("{label} {size} × {l} mm, paroi {t}"), "properties": {"essence": "métal"}}),
+    )?;
     run(s, "component.activate", json!({"component": active}))?;
     Ok(json!({"component": comp, "name": name}))
 }
@@ -1087,7 +1499,11 @@ fn export_html(s: &mut Session, p: &Value) -> Result<Value> {
         let ms = coin_meubles(s, coin);
         let placed: Vec<Placed> = ms.iter().map(placed_of).collect();
         let esc = name.replace('&', "&amp;").replace('<', "&lt;");
-        sections.push(format!("<section class=\"meuble\"><h2>{esc}</h2><p class=\"sub\">Coin de patrouille · {} meubles</p>{}</section>\n", ms.len(), dessin::svg(&dessin::sheet_coin(&placed, &SheetCfg::standard(&name, &who), (1, 1)))));
+        sections.push(format!(
+            "<section class=\"meuble\"><h2>{esc}</h2><p class=\"sub\">Coin de patrouille · {} meubles</p>{}</section>\n",
+            ms.len(),
+            dessin::svg(&dessin::sheet_coin(&placed, &SheetCfg::standard(&name, &who), (1, 1)))
+        ));
         for m in &ms {
             sections.push(meuble_section(&m.name, &model_name(&m.kind), &who, &m.poles));
             count += 1;

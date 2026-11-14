@@ -34,7 +34,10 @@ pub fn steps(poles: &[Pole]) -> Vec<String> {
         v.push("Fendre les rondins en deux (ou en quarts) dans leur longueur, face plate du bon côté.".into());
     }
     if n("tenon") + n("aronde") > 0 {
-        v.push(format!("Façonner les {} tenons et percer les mortaises correspondantes (tenon = un tiers du diamètre de la pièce qui reçoit).", n("tenon") + n("aronde")));
+        v.push(format!(
+            "Façonner les {} tenons et percer les mortaises correspondantes (tenon = un tiers du diamètre de la pièce qui reçoit).",
+            n("tenon") + n("aronde")
+        ));
     }
     if n("mi-bois") > 0 {
         v.push(format!("Tailler les {} mi-bois : chaque pièce est entaillée de la moitié de son épaisseur.", n("mi-bois")));
@@ -81,7 +84,15 @@ pub fn meuble_section(title: &str, kind: &str, author: &str, poles: &[Pole]) -> 
     o.push_str("<h3>Liste de débit</h3><table><tr><th>Qté</th><th>Pièce</th><th>Ø mm</th><th>Visible</th><th>À débiter</th></tr>");
     for r in cut_list(poles) {
         let section = if r.width > 0.0 { format!("{}×{}", mm(r.diameter), mm(r.width)) } else { mm(r.diameter) };
-        let _ = write!(o, "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>", r.count, esc(&r.role), section, mm(r.length), mm(r.cut_length));
+        let _ = write!(
+            o,
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            r.count,
+            esc(&r.role),
+            section,
+            mm(r.length),
+            mm(r.cut_length)
+        );
     }
     o.push_str("</table><ol>");
     for s in steps(poles) {
@@ -114,7 +125,6 @@ svg.iso+table{{width:100%}}section>svg:last-child{{width:100%;height:auto;border
     o.push_str("</body></html>\n");
     o
 }
-
 
 #[cfg(test)]
 mod tests {
