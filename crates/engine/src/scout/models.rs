@@ -64,12 +64,13 @@ pub const MODELS: &[Model] = &[
         id: "banc",
         name: "Banc court",
         category: "Assises",
-        summary: "Un gros rondin posé sur quatre pieds tenonnés.",
+        summary: "Un gros rondin posé sur quatre pieds inclinés, tenonnés dans le rondin.",
         params: &[
             TEN,
             num("L", "Longueur du banc (mm)", 1500.0),
             num("dL", "Diamètre du rondin (mm, 200 au maximum)", 200.0),
             num("h", "Hauteur de l’assise (mm)", 450.0),
+            num("dP", "Diamètre des pieds (mm, de 40 à 80)", 60.0),
             tick("fendu", "Rondin fendu en deux (assise plate)", 1.0),
         ],
     },
@@ -459,11 +460,21 @@ fn banc(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     if flat {
         b.split(seat, SplitMode::Demi)?;
     }
-    let dp = (dl * 0.45).max(60.0);
-    for x in [l * 0.15, l * 0.85] {
+    // des pieds de branche (4 à 8 cm), écartés en V sous le rondin comme dans CathIA : chaque paire
+    // part du sol de part et d'autre et monte vers l'axe du rondin, où elle entre par un tenon
+    let dp = p.get("dP");
+    if !(40.0..=80.0).contains(&dp) {
+        return Err("diamètre des pieds : de 40 à 80 mm (des branches, pas des rondins)".into());
+    }
+    let ecart = dl * 0.9 + 60.0;
+    let haut = if flat { zc - 20.0 } else { zc };
+    for x in [l * 0.14, l * 0.86] {
         for s in [-1.0, 1.0] {
-            let y = yc + s * dl * 0.25;
-            let leg = b.bar("pied", dp, v(x, y, 0.0), v(x, y, zc));
+            let pied = v(x, yc + s * ecart, 0.0);
+            let centre = v(x, yc, zc);
+            let t = haut / zc;
+            let tete = v(x, pied[1] + (centre[1] - pied[1]) * t, pied[2] + (centre[2] - pied[2]) * t);
+            let leg = b.bar("pied", dp, pied, tete);
             b.tenon(leg, seat, ten)?;
         }
     }

@@ -530,6 +530,9 @@ fn make_pole_avec(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &P
     for op in pole.ops.iter().filter(|o| !matches!(o, Op::Saddle { .. })) {
         apply_op(s, name, pole, op)?;
     }
+    if kind != "TRAVERSE" {
+        a_plat_au_sol(s, name, pole)?;
+    }
     run(s, "occurrence.move", json!({"occurrence": occ, "matrix": pole.matrix(), "capture": true, "move_grounded": true}))?;
     save_pole(s, comp, kind, pole)?;
     run(s, "component.activate", json!({"component": parent}))?;
@@ -538,6 +541,54 @@ fn make_pole_avec(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &P
 
 /// Once every pole of a part exists: each end cut to fit another pole is cut to it (`#n` names the
 /// pole of index n), and the records are saved with the real names.
+/// Retire de `pole` tout ce qui est derrière le plan passant par `point` de normale `n` (côté −n),
+/// les deux dans le repère du meuble : un grand prisme dont une face est ce plan, dessiné dans le
+/// plan de la perche le plus proche de la normale.
+fn demi_espace(s: &mut Session, name: &str, pole: &Pole, point: V3, n: V3, r: f64) -> Result<()> {
+    let nl = pole.local_dir(n);
+    let o = pole.local(point);
+    let a = (0..3).min_by(|&i, &j| nl[i].abs().total_cmp(&nl[j].abs())).unwrap_or(0);
+    let (u, v) = match a {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let big = (pole.length + pole.radius() + r) * 4.0 + 100.0;
+    let mut t = [0.0; 3];
+    t[u] = -nl[v];
+    t[v] = nl[u];
+    let tn = (t[u] * t[u] + t[v] * t[v]).sqrt();
+    if tn < 1e-9 {
+        return Ok(());
+    }
+    let t = [t[0] / tn, t[1] / tn, t[2] / tn];
+    let mut nn = [0.0; 3];
+    nn[u] = nl[u];
+    nn[v] = nl[v];
+    let nnl = (nn[u] * nn[u] + nn[v] * nn[v]).sqrt().max(1e-9);
+    let nn = [nn[0] / nnl, nn[1] / nnl, nn[2] / nnl];
+    let mut c = o;
+    c[a] = 0.0;
+    let at = |k: f64, m: f64| -> V3 { [c[0] + t[0] * k - nn[0] * m, c[1] + t[1] * k - nn[1] * m, c[2] + t[2] * k - nn[2] * m] };
+    let pts = vec![at(-big, 0.0), at(big, 0.0), at(big, big), at(-big, big)];
+    let tool = tool_name(name);
+    tool_prism(s, &tool, a, 0.0, &pts, big)?;
+    combine(s, name, &tool, "cut")
+}
+
+/// Un pied incliné posé au sol (z = 0 du meuble) : son bout est coupé à plat, à l'horizontale, au
+/// lieu de s'enfoncer dans le sol.
+fn a_plat_au_sol(s: &mut Session, name: &str, pole: &Pole) -> Result<()> {
+    let (a, b) = (pole.p_start(), pole.end());
+    let bas = if a[2] <= b[2] { a } else { b };
+    let incline = (1.0 - pole.dir[2] * pole.dir[2]).max(0.0).sqrt();
+    // seulement un bout qui touche le sol et une perche inclinée (un bout droit est déjà plat)
+    if bas[2].abs() > 1.0 || incline < 0.02 || incline > 0.95 {
+        return Ok(());
+    }
+    demi_espace(s, name, pole, [bas[0], bas[1], 0.0], [0.0, 0.0, 1.0], pole.radius())
+}
+
 /// Le bout `end` de `pole` coupé à la forme brute de `cible` (repère de `pole`).
 fn gueule_de_loup(s: &mut Session, name: &str, pole: &Pole, end: End, cible: &Pole) -> Result<()> {
     let r = cible.radius();
@@ -552,41 +603,10 @@ fn gueule_de_loup(s: &mut Session, name: &str, pole: &Pole, end: End, cible: &Po
     };
     let tool = tool_name(name);
     match plan {
-        Some(n) => {
-            // tout ce qui passe derrière la face plate (côté bois gardé) part : un grand pavé dont une
-            // face est ce plan, dessiné dans le plan de la perche le plus proche de la normale
-            let nl = pole.local_dir(n);
-            let o = pole.local(cible.origin);
-            let a = (0..3).min_by(|&i, &j| nl[i].abs().total_cmp(&nl[j].abs())).unwrap_or(0);
-            let (u, v) = match a {
-                0 => (1, 2),
-                1 => (0, 2),
-                _ => (0, 1),
-            };
-            let big = (pole.length + pole.radius() + r) * 4.0 + 100.0;
-            // le long du plan (direction t), et vers l'arrière (−n)
-            let mut t = [0.0; 3];
-            t[u] = -nl[v];
-            t[v] = nl[u];
-            let tn = (t[u] * t[u] + t[v] * t[v]).sqrt();
-            if tn < 1e-9 {
-                return Ok(());
-            }
-            let t = [t[0] / tn, t[1] / tn, t[2] / tn];
-            let mut nn = [0.0; 3];
-            nn[u] = nl[u];
-            nn[v] = nl[v];
-            let nnl = (nn[u] * nn[u] + nn[v] * nn[v]).sqrt().max(1e-9);
-            let nn = [nn[0] / nnl, nn[1] / nnl, nn[2] / nnl];
-            let mut c = o;
-            c[a] = 0.0;
-            let at = |k: f64, m: f64| -> V3 { [c[0] + t[0] * k - nn[0] * m, c[1] + t[1] * k - nn[1] * m, c[2] + t[2] * k - nn[2] * m] };
-            let pts = vec![at(-big, 0.0), at(big, 0.0), at(big, big), at(-big, big)];
-            tool_prism(s, &tool, a, 0.0, &pts, big)?;
-        }
+        Some(n) => return demi_espace(s, name, pole, cible.origin, n, r),
         None => {
             let (z0, z1) = cible.built_range();
-            let base = cible.local(pole::add(cible.origin, pole::mul(cible.dir, z0)));
+            let base = pole.local(pole::add(cible.origin, pole::mul(cible.dir, z0)));
             tool_cylinder(s, &tool, base, pole.local_dir(cible.dir), 2.0 * r, z1 - z0)?;
         }
     }
