@@ -125,7 +125,7 @@ pub const MODELS: &[Model] = &[
         id: "table",
         name: "Table à pieds en X",
         category: "Tables et plans de travail",
-        summary: "Deux paires de pieds croisés en mi-bois, deux lisses et un plateau de claies.",
+        summary: "La table de CathIA : deux X de pieds à mi-bois, deux traverses hautes tenonnées, une traverse basse dans les croisements, un plateau de claies tressées sous, sur, sous autour d'une traverse fine.",
         params: &[
             TEN_SCIE,
             num("long", "Longueur du plateau (mm)", 1800.0),
@@ -144,6 +144,8 @@ pub const MODELS: &[Model] = &[
             ),
             num("maille", "Maille du filet (mm)", 30.0),
             num("dc", "Diamètre des claies (mm)", 20.0),
+            num("c0", "Début du clayage après la 1ʳᵉ jambe (mm)", 0.0),
+            num("cl", "Longueur clayée (mm), 0 = jusqu’à la dernière jambe", 0.0),
         ],
     },
     Model {
@@ -710,42 +712,86 @@ fn bancdiag(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
 }
 
 fn table(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
-    let (l, w, h, dc) = (p.get("long"), p.get("larg"), p.get("h"), p.get("dc"));
-    let dl = 70.0;
-    let ztop = h - dc - dl / 2.0;
-    let (xa, xb) = (l * 0.12, l * 0.88);
-    let (ya, yb) = (w * 0.08, w * 0.92);
-    // the lisses carry the top
-    let l0 = b.bar("lisse", dl, v(0.0, ya, ztop), v(l, ya, ztop));
-    let l1 = b.bar("lisse", dl, v(0.0, yb, ztop), v(l, yb, ztop));
-    for x in [xa, xb] {
-        // two legs crossing as an X in the plane x, one a little each side, half-lapped
-        let off = dl / 4.0;
-        let a = b.bar("pied en X", dl, v(x - off, ya, ztop), v(x - off, yb, 0.0));
-        let c = b.bar("pied en X", dl, v(x + off, yb, ztop), v(x + off, ya, 0.0));
-        b.mibois(a, c, 50.0)?;
-        b.tenon(a, l0, ten)?;
-        b.tenon(c, l1, ten)?;
+    // La table à pieds en X de CathIA, pièce pour pièce : à chaque bout un X de deux pieds Ø60 à mi-bois,
+    // dans un plan en travers ; deux traverses hautes Ø50 tenonnées là où les jambes passent à la
+    // hauteur du plateau (l'une dans les montants, l'autre dans les descendants) ; une traverse basse
+    // Ø40 qui traverse les croisements (tenonnée dans les montants, percée dans les descendants) ; une
+    // traverse fine Ø30 au milieu, sans support, que la tension des claies tient ; les claies jointives
+    // tressées sous, sur, sous.
+    let (lp, wp, h, dc) = (p.get("long"), p.get("larg"), p.get("h"), p.get("dc"));
+    let mode = p.get("mode") as usize;
+    let (droit, fil) = (mode == 1 || mode == 3, mode == 2);
+    if lp < 700.0 || wp < if fil { 300.0 } else { 500.0 } {
+        return Err("plateau trop petit".into());
     }
-    // a thin central rail holds the legs apart
-    match p.get("mode") as usize {
-        2 => net(b, (dc, l - dc, ya, yb), ztop + dl / 2.0, p.get("maille")),
-        // dans des quarts de bois taillés dans les lisses (CathIA)
-        1 => {
-            let o = super::tissage::Plateau { d: dc, debut: xa + dl, fin: l - xb + dl, ..super::tissage::Plateau::default() };
-            super::tissage::plateau(b, l0, l1, &o)?;
-        }
-        3 => {
+    if !(500.0..=900.0).contains(&h) {
+        return Err("hauteur du plateau : de 50 à 90 cm (75 cm pour une table)".into());
+    }
+    if !(8.0..=20.0).contains(&dc) {
+        return Err("diamètre des claies : de 8 à 20 mm".into());
+    }
+    let (dt, dm, dpied) = (50.0, 30.0, 60.0);
+    let rt = dt / 2.0;
+    let zt = if droit {
+        h - dc
+    } else if fil {
+        h - rt - 2.0
+    } else {
+        h - rt - dc
+    };
+    let hl = h;
+    let x1 = (lp * 0.07).round().max(70.0);
+    let x2 = lp - x1;
+    let zc = hl / 2.0;
+    let k = 2.0 * zt / hl - 1.0;
+    let yt = if droit || fil { (wp - dt) / 2.0 } else { (wp / 2.0 - 70.0) * k };
+    let yw = yt / k;
+    let mut montants = Vec::new();
+    let mut descendants = Vec::new();
+    for x in [x1, x2] {
+        let a = b.bar("pied montant", dpied, v(x, -yw, 0.0), v(x, yw, hl));
+        let d = b.bar("pied descendant", dpied, v(x, yw, 0.0), v(x, -yw, hl));
+        b.mibois(a, d, 50.0)?;
+        montants.push(a);
+        descendants.push(d);
+    }
+    let t20 = TenonOpts { d: 20.0, ..ten };
+    let r1 = b.bar("traverse haute", dt, v(x1 - 32.0, yt, zt), v(x2 + 32.0, yt, zt));
+    let r2 = b.bar("traverse haute", dt, v(x1 - 32.0, -yt, zt), v(x2 + 32.0, -yt, zt));
+    for i in 0..2 {
+        b.tenon(r1, montants[i], t20)?;
+        b.tenon(r2, descendants[i], t20)?;
+    }
+    let c = b.bar("traverse basse centrale", 40.0, v(x1 - 32.0, 0.0, zc), v(x2 + 32.0, 0.0, zc));
+    for (i, x) in [x1, x2].iter().enumerate() {
+        b.tenon(c, montants[i], t20)?;
+        b.percer(descendants[i], c, v(*x, 0.0, zc), v(1.0, 0.0, 0.0), 20.0)?;
+    }
+    let lo = x1 - 32.0;
+    let debut = 66.0 + p.get("c0");
+    let zone = if p.get("cl") > 0.0 { p.get("cl") } else { (x2 - x1) - 68.0 };
+    match mode {
+        2 => net(b, (lo + debut, lo + debut + zone, -yt, yt), zt + rt + 1.0, p.get("maille")),
+        1 | 3 => {
+            let garniture = if mode == 3 { super::tissage::Garniture::Planches } else { super::tissage::Garniture::Claies };
             let o = super::tissage::Plateau {
-                garniture: super::tissage::Garniture::Planches,
-                jeu: 3.0,
-                debut: xa + dl,
-                fin: l - xb + dl,
+                garniture,
+                d: dc,
+                jeu: if mode == 3 { 3.0 } else { 0.0 },
+                debut,
+                fin: (x2 + 32.0 - lo) - debut - zone,
                 ..super::tissage::Plateau::default()
             };
-            super::tissage::plateau(b, l0, l1, &o)?;
+            super::tissage::plateau(b, r1, r2, &o)?;
         }
-        _ => claies(b, (0.0, l), (0.0, w), ztop + dl / 2.0, dc),
+        _ => {
+            let mid = b.bar("traverse fine centrale", dm, v(lo, 0.0, zt), v(x2 + 32.0, 0.0, zt));
+            let supports = [b.poles[r1].clone(), b.poles[mid].clone(), b.poles[r2].clone()];
+            let o = super::tissage::Clayonnage { d: dc, pas: 0.0, marge: 0.0, debut, zone, debord: 0.0, dessus: false };
+            b.claies = super::tissage::clayonnage(&supports, &o)?;
+            // les claies tiennent la traverse fine et reposent sur les traverses hautes
+            b.liens.extend([(r1, mid), (mid, r2)]);
+        }
     }
     Ok(())
 }

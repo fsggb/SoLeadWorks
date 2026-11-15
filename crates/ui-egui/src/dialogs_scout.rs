@@ -402,10 +402,13 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Sc) -> bool {
     false
 }
 
-fn body_name(inputs: &[SelInput], i: usize) -> Result<String, String> {
+/// La pièce choisie : un corps, une face ou une arête de ce corps, ou la pièce dans le navigateur.
+fn body_name(inputs: &[SelInput], i: usize) -> Result<Value, String> {
     match inputs.get(i).and_then(|inp| inp.items.first()) {
-        Some(Sel::Body { name }) => Ok(name.clone()),
-        Some(_) => Err("choisissez une pièce entière (cliquez sur le bois)".into()),
+        Some(Sel::Body { name }) => Ok(json!(name)),
+        Some(Sel::Face { body, .. } | Sel::Edge { body, .. }) => Ok(json!(body)),
+        Some(Sel::Occurrence { path }) => path.last().map(|o| json!({ "occurrence": o })).ok_or_else(|| "choisissez une pièce".into()),
+        Some(_) => Err("choisissez une pièce (cliquez sur le bois)".into()),
         None => Err(format!("choisissez la pièce {} dans la vue", i + 1)),
     }
 }

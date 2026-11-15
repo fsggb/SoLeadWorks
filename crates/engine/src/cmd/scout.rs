@@ -180,7 +180,20 @@ fn component_id(s: &Session, v: &Value, cmd: &str) -> Result<u64> {
     match v {
         Value::Number(n) => n.as_u64().filter(|id| s.doc.components.iter().any(|c| c.id == *id)).ok_or_else(|| bad(cmd, "no such component")),
         Value::String(name) => {
-            s.doc.components.iter().find(|c| c.name == *name).map(|c| c.id).ok_or_else(|| bad(cmd, format!("no component named `{name}`")))
+            // le nom d'un corps est celui de son composant ; un corps renommé « nom (2) » retrouve le sien
+            let base = name.rsplit_once(" (").filter(|(_, n)| n.ends_with(')')).map_or(name.as_str(), |(b, _)| b);
+            s.doc
+                .components
+                .iter()
+                .find(|c| c.name == *name)
+                .or_else(|| s.doc.components.iter().find(|c| c.name == base && c.properties.contains_key(P_POLE)))
+                .map(|c| c.id)
+                .ok_or_else(|| bad(cmd, format!("« {name} » n'est pas une pièce de SoLeadWorks")))
+        }
+        // une pièce choisie dans le navigateur : son placement
+        Value::Object(o) if o.contains_key("occurrence") => {
+            let occ = o.get("occurrence").and_then(Value::as_u64).unwrap_or(0);
+            s.doc.occurrences.iter().find(|x| x.id == occ).map(|x| x.component).ok_or_else(|| bad(cmd, "cette pièce n'existe plus"))
         }
         _ => Err(bad(cmd, "a component is an id or a name")),
     }
@@ -492,10 +505,14 @@ const BOIS: [u8; 3] = [214, 164, 104];
 /// ne doit pas empêcher de construire le meuble : l'erreur est ignorée.
 fn en_bois(s: &mut Session, comp: u64) {
     // les corps des perches portent le nom de leur composant (enfants directs du meuble)
-    let corps: Vec<String> = s.doc.components.iter().filter(|c| c.parent == comp).map(|c| c.name.clone()).collect();
+    let corps: Vec<String> =
+        s.doc.components.iter().filter(|c| c.parent == comp && c.properties.contains_key(P_POLE)).map(|c| c.name.clone()).collect();
     if corps.is_empty() || run(s, "appearance.assign", json!({"bodies": corps, "color": BOIS})).is_err() {
         let _ = run(s, "appearance.assign", json!({"components": [comp.to_string()], "color": BOIS}));
     }
+    // les claies tressées, un peu plus claires (osier, noisetier écorcé)
+    let claies: Vec<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).filter(|n| n.starts_with("Claie ")).collect();
+    let _ = (!claies.is_empty()).then(|| run(s, "appearance.assign", json!({"bodies": claies, "color": [196, 150, 92]})));
 }
 
 /// Makes the component of one pole under `parent`, builds and places it, saves its record.
@@ -696,7 +713,8 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = str_(p, "type").ok_or_else(|| bad(cmd, "`type` is required (scout.meuble.types)"))?.to_string();
     let m = models::model(&kind).ok_or_else(|| bad(cmd, format!("unknown furniture `{kind}` (scout.meuble.types)")))?;
     let params = model_params(cmd, m, p)?;
-    let poles = models::build(&kind, &params).map_err(|x| bad(cmd, x))?;
+    let construit = models::build_complet(&kind, &params).map_err(|x| bad(cmd, x))?;
+    let (poles, claies) = (construit.poles, construit.claies);
     let rotation = rotation_of(cmd, p)?;
     let at = p.get("at").map(|v| vec2(v).ok_or_else(|| bad(cmd, "`at` is [x, y] in mm"))).transpose()?;
     let coin = coin_param(s, p, cmd)?;
@@ -715,6 +733,10 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
         comps.push((pc, part));
     }
     fit_saddles(s, &kind, &comps, &mut poles, false)?;
+    if !claies.is_empty() {
+        run(s, "component.activate", json!({"component": comp}))?;
+        construire_claies(s, comp, &format!("Claies tressées {name}"), &claies)?;
+    }
     en_bois(s, comp);
     let (x, y) = at.map_or((0.0, 0.0), |v| (v.x, v.y));
     run(
@@ -1136,18 +1158,54 @@ fn construire_claies(s: &mut Session, parent: u64, nom: &str, claies: &[tissage:
     let active = s.active_component;
     let c = run(s, "component.create", json!({"name": nom, "parent": parent, "grounded": false}))?;
     let comp = id_of(&c, "component");
+    // Chaque claie suit sa courbe (Catmull-Rom par ses points d'appui) en tronçons droits à pans, un
+    // peu chevauchants : un tube balayé le long d'une spline coûtait plus d'une demi-seconde par claie
+    // (47 s pour une table), les tronçons quelques millisecondes.
     for (i, claie) in claies.iter().enumerate() {
-        let esquisse = format!("Claie {} {nom}", i + 1);
-        let points: Vec<V3> = claie.points.iter().map(|p| world_point(s, *p)).collect();
-        run(s, "sketch.create", json!({"plane": "XY", "name": esquisse}))?;
-        run(s, "sketch.options", json!({"sketch_3d": true}))?;
-        let r = run(s, "sketch.spline3d", json!({"points": points}))?;
-        run(s, "sketch.finish", json!({}))?;
-        let courbes = r.get("curves").cloned().unwrap_or_else(|| json!([]));
-        run(s, "solid.pipe", json!({"path_sketch": esquisse, "path": courbes, "diameter": claie.d, "body_name": esquisse}))?;
+        let pts = lisser(&claie.points, 1);
+        let ext = claie.d * 0.35;
+        for (j, w) in pts.windows(2).enumerate() {
+            let (a, b) = (w[0], w[1]);
+            let l = pole::len(pole::sub(b, a));
+            if l < 1e-6 {
+                continue;
+            }
+            let u = pole::mul(pole::sub(b, a), 1.0 / l);
+            let debut = pole::sub(a, pole::mul(u, if j == 0 { 0.0 } else { ext }));
+            let long = l + if j == 0 { ext } else { 2.0 * ext };
+            rond(s, &format!("Claie {} {nom} ({})", i + 1, j + 1), debut, u, claie.d, long)?;
+        }
     }
     run(s, "component.activate", json!({"component": active}))?;
     Ok(comp)
+}
+
+/// Une courbe de Catmull-Rom par les points `p`, `n` sous-tronçons par intervalle.
+fn lisser(p: &[V3], n: usize) -> Vec<V3> {
+    if p.len() < 3 || n < 2 {
+        return p.to_vec();
+    }
+    let mut out = Vec::with_capacity((p.len() - 1) * n + 1);
+    for i in 0..p.len() - 1 {
+        let p0 = if i == 0 { p[0] } else { p[i - 1] };
+        let (p1, p2) = (p[i], p[i + 1]);
+        let p3 = if i + 2 < p.len() { p[i + 2] } else { p[i + 1] };
+        for k in 0..n {
+            let t = k as f64 / n as f64;
+            let (t2, t3) = (t * t, t * t * t);
+            let q: V3 = std::array::from_fn(|c| {
+                0.5 * (2.0 * p1[c]
+                    + (-p0[c] + p2[c]) * t
+                    + (2.0 * p0[c] - 5.0 * p1[c] + 4.0 * p2[c] - p3[c]) * t2
+                    + (-p0[c] + 3.0 * p1[c] - 3.0 * p2[c] + p3[c]) * t3)
+            });
+            out.push(q);
+        }
+    }
+    if let Some(l) = p.last() {
+        out.push(*l);
+    }
+    out
 }
 
 fn liste_pieces(s: &Session, p: &Value, cle: &str, cmd: &str) -> Result<Vec<u64>> {

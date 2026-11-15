@@ -386,7 +386,12 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             act(if app.session.visibility.hidden_bodies.contains(name) { "ui.show" } else { "ui.hide" }, "Show/Hide", "eye")
                 .with(json!({"bodies":[name]})),
         ],
-        Target::Body { name } => body_items(app, std::slice::from_ref(name), true),
+        // une perche de SoLeadWorks se déplace en entier (son placement), pas son corps seul : sinon sa fiche
+        // garde l'ancienne position et les assemblages se calculent faux
+        Target::Body { name } => match perche(app, name) {
+            Some(path) => occurrence_items(app, &path),
+            None => body_items(app, std::slice::from_ref(name), true),
+        },
         Target::Sketch { id } => sketch_items(app, *id),
         Target::Feature { id } => feature_items(app, *id),
         Target::Plane { id } => plane_items(app, *id),
@@ -559,10 +564,27 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
         }
     }
     let piece_dans_la_vue = matches!(target, Target::Viewport) && app.session.active_sketch.is_none() && !app.session.selection.is_empty();
+    if piece_dans_la_vue {
+        let corps = app.session.selection.iter().find_map(|s| match s {
+            Sel::Body { name } | Sel::Face { body: name, .. } | Sel::Edge { body: name, .. } => Some(name.clone()),
+            _ => None,
+        });
+        if let Some(path) = corps.and_then(|c| perche(app, &c)) {
+            v = occurrence_items(app, &path);
+        }
+    }
     if piece_dans_la_vue || matches!(target, Target::Body { .. } | Target::Component { .. } | Target::Occurrence { .. }) {
         v = court(v);
     }
     v
+}
+
+/// Le placement de la perche de SoLeadWorks dont `body` est le corps (son composant porte le même nom).
+fn perche(app: &SolveApp, body: &str) -> Option<Vec<u64>> {
+    let base = body.rsplit_once(" (").filter(|(_, n)| n.ends_with(')')).map_or(body, |(b, _)| b);
+    let c = app.session.doc.components.iter().find(|c| (c.name == body || c.name == base) && c.properties.contains_key("scout_pole"))?;
+    let path = app.session.doc.first_path(c.id);
+    (!path.is_empty()).then_some(path)
 }
 
 /// SoLeadWorks : le menu du clic droit sur une pièce reste court, « Déplacer » en tête ; le reste

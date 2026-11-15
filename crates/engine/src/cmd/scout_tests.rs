@@ -351,10 +351,13 @@ fn le_clayonnage_tresse_ses_claies_et_se_modifie_apres_coup() {
     assert_eq!(r["traverse_fine"], true, "deux supports : la traverse fine du milieu est ajoutée");
     let n = r["claies"].as_u64().unwrap_or(0);
     assert!((12..=14).contains(&n), "780 mm au pas de 60 : {n} claies");
-    // une claie = un seul corps, un tube le long d'une spline
+    // une claie = quelques tronçons qui suivent sa courbe (« Claie 3 Clayonnage (2) ») : autant de claies que de numéros
     let inspect = run(&mut s, "document.inspect", json!({}));
-    let claies = inspect["bodies"].as_array().map_or(0, |b| b.iter().filter(|x| x["name"].as_str().is_some_and(|n| n.starts_with("Claie"))).count());
-    assert_eq!(claies as u64, n, "{inspect}");
+    let numeros: std::collections::BTreeSet<String> = inspect["bodies"]
+        .as_array()
+        .map(|b| b.iter().filter_map(|x| x["name"].as_str()).filter(|n| n.starts_with("Claie ")).filter_map(|n| n.split(' ').nth(1).map(str::to_string)).collect())
+        .unwrap_or_default();
+    assert_eq!(numeros.len() as u64, n, "{inspect}");
     // les claies passent au-dessus et au-dessous des supports : la hauteur dépasse le support des deux côtés
     let h = size_of(&s, "Clayonnage")[2];
     assert!(h > 60.0 + 2.0 * 20.0 - 1.0, "épaisseur du clayonnage {h}");

@@ -21,7 +21,7 @@ fn one() -> u8 {
 /// Most poles one design part may have (a hostile size cannot ask for millions).
 pub const MAX_POLES: usize = 400;
 /// Most operations one pole record may carry (the record is a property of 4 KB).
-pub const MAX_OPS: usize = 14;
+pub const MAX_OPS: usize = 48;
 /// Play left in a mortise, in mm.
 pub const JEU: f64 = 1.0;
 
@@ -285,6 +285,8 @@ pub struct Build {
     /// Les paires de pièces assemblées (tenon, mi-bois, cheville, brêlage…) : elles ont le droit de se
     /// toucher et de s'interpénétrer à la jonction.
     pub liens: Vec<(usize, usize)>,
+    /// Les claies tressées du meuble (des courbes, construites après les perches).
+    pub claies: Vec<super::tissage::Claie>,
 }
 
 /// What a tenon asks for.
@@ -534,6 +536,19 @@ impl Build {
     }
 
     /// A peg of diameter `d` through the point `p` along `k`, through `a` and `b`.
+    /// Un trou de part en part dans `r` (diamètre `d`), au point `p` dans la direction `u` : là où la pièce
+    /// `par` le traverse (une traverse qui passe dans le croisement à mi-bois d'un X).
+    pub fn percer(&mut self, r: usize, par: usize, p: V3, u: V3, d: f64) -> Result<(), String> {
+        let q = self.poles.get(r).ok_or("pièce inconnue")?;
+        let u = norm(u);
+        let prof = 4.0 * q.radius() + 20.0;
+        let base = sub(p, mul(u, prof / 2.0));
+        let op = Op::Hole { c: q.local(base), u: q.local_dir(u), d: d + JEU, depth: prof };
+        self.poles[r].push(op)?;
+        self.liens.push((r, par));
+        Ok(())
+    }
+
     pub fn peg_line(&mut self, a: usize, b: usize, p: V3, k: V3, d: f64, total: f64) -> Result<usize, String> {
         let k = norm(k);
         let origin = sub(p, mul(k, total / 2.0));
