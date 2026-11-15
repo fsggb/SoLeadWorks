@@ -78,7 +78,7 @@ pub const MODELS: &[Model] = &[
         id: "fauteuil",
         name: "Fauteuil carré",
         category: "Assises",
-        summary: "Quatre pieds, un cadre d'assise, des claies et un dossier.",
+        summary: "Le fauteuil de Michel Froissart : deux côtés en échelle, accoudoirs, siège en bâtons tenonnés dans les supports, dossier.",
         params: &[
             TEN,
             num("larg", "Largeur d’assise (mm)", 650.0),
@@ -360,7 +360,8 @@ fn frame(
             let dpied = legs.iter().filter_map(|&g| b.poles.get(g)).map(|p| p.diameter).fold(f64::MAX, f64::min);
             let mort = |d: f64| (d * 0.55).min(dpied / 3.0).max(8.0).round() + 1.0;
             let ecart = (mort(dl) + mort(dt)) / 2.0 + 20.0;
-            let zt = z - ecart.max(dl * 0.6);
+            // et au moins 5 cm entre deux trous perpendiculaires (Michel Froissart)
+            let zt = z - ecart.max(dl * 0.6).max(52.0);
             // et chaque pied dépasse au-dessus de la mortaise du haut, sinon le bout fend
             for &g in &legs {
                 if let Some(p) = b.poles.get_mut(g) {
@@ -555,21 +556,75 @@ fn etabli(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
 }
 
 fn fauteuil(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
+    // Le fauteuil carré du livre « Froissartage » de Michel Froissart : deux côtés en échelle (pied
+    // avant, pied arrière, deux bâtons de chaise, le support du siège, l'accoudoir), réunis par des
+    // bâtons perpendiculaires toujours décalés en hauteur des trous des côtés (5 cm au moins), le siège
+    // en bâtons tenonnés tous les 7 cm dans les deux supports, le dossier en bâtons. Pas de cadre
+    // complet au même niveau : deux trous en croix à la même hauteur affaibliraient le pied.
     let (w, d, hs, hd) = (p.get("larg"), p.get("prof"), p.get("hs"), p.get("hd"));
-    let dl = 60.0;
-    let bx = (0.0, w, 0.0, d);
-    let zr = hs - 30.0;
-    let legs = legs4(b, dl, bx, [hs, hs, hd, hd]);
-    let f = frame(b, ten, Asm::Tenons, bx, zr, legs, 40.0, 40.0)?;
-    let _ = f;
-    // the back: two rails between the rear legs
-    for z in [hd - 120.0, hd - 340.0] {
-        let t = b.bar("traverse de dossier", 40.0, v(0.0, d, z), v(w, d, z));
-        b.tenon(t, legs[2], ten)?;
-        b.tenon(t, legs[3], ten)?;
+    if hd < hs + 300.0 {
+        return Err("le dossier doit monter au moins 30 cm au-dessus du siège".into());
     }
-    claies(b, (0.0, w), (0.0, d), zr + 20.0, 25.0);
+    let (dp, db, dsup, dacc, ddos) = (55.0, 25.0, 48.0, 45.0, 35.0);
+    let k = hs / 400.0;
+    let (z_b1, z_b2, z_acc) = (130.0 * k, 270.0 * k, hs + 170.0);
+    let z_av = 180.0 * k; // le bâton de devant, entre les deux bâtons des côtés
+    let z_dos = [180.0 * k, hs + 70.0, hd - 150.0, hd - 60.0];
+    let mut avant = [0; 2];
+    let mut arriere = [0; 2];
+    for (i, x) in [0.0, w].iter().enumerate() {
+        avant[i] = b.bar("pied avant", dp, v(*x, 0.0, 0.0), v(*x, 0.0, z_acc));
+        arriere[i] = b.bar("pied arrière", dp, v(*x, d, 0.0), v(*x, d, hd));
+        // les côtés : bâtons de chaise, support de siège
+        for (z, dia, nom) in [(z_b1, db, "bâton de côté"), (z_b2, db, "bâton de côté"), (hs, dsup, "support de siège")] {
+            let t = b.bar(nom, dia, v(*x, 0.0, z), v(*x, d, z));
+            b.tenon(t, avant[i], ten)?;
+            b.tenon(t, arriere[i], ten)?;
+        }
+        // l'accoudoir : tenonné dans le pied arrière, il reçoit le tenon du haut du pied avant
+        let acc = b.bar("accoudoir", dacc, v(*x, -100.0, z_acc), v(*x, d, z_acc));
+        b.tenon(acc, arriere[i], ten)?;
+        b.tenon(avant[i], acc, ten)?;
+    }
+    // devant : un bâton ; derrière : un bâton bas, le dossier
+    let t = b.bar("bâton de devant", db, v(0.0, 0.0, z_av), v(w, 0.0, z_av));
+    b.tenon(t, avant[0], ten)?;
+    b.tenon(t, avant[1], ten)?;
+    let mut dos = Vec::new();
+    for (i, z) in z_dos.iter().enumerate() {
+        let t = b.bar(if i == 0 { "bâton de derrière" } else { "bâton de dossier" }, if i == 0 { db } else { ddos }, v(0.0, d, *z), v(w, d, *z));
+        b.tenon(t, arriere[0], ten)?;
+        b.tenon(t, arriere[1], ten)?;
+        dos.push(t);
+    }
+    // trois baguettes verticales entre les deux bâtons du bas du dossier
+    for f in [0.25, 0.5, 0.75] {
+        let g = b.bar("baguette de dossier", 20.0, v(w * f, d, z_dos[1]), v(w * f, d, z_dos[2]));
+        b.tenon(g, dos[1], ten)?;
+        b.tenon(g, dos[2], ten)?;
+    }
+    // le siège : des bâtons d'un support à l'autre, tous les 7 cm à partir de 3 cm du pied avant
+    let n = (((d - 30.0 - dp) / 70.0).floor().max(1.0)) as usize;
+    for i in 0..n.min(20) {
+        let y = dp / 2.0 + 30.0 + 70.0 * i as f64;
+        let t = b.bar("bâton de siège", db, v(0.0, y, hs), v(w, y, hs));
+        b.tenon(t, supports(b)[0], ten)?;
+        b.tenon(t, supports(b)[1], ten)?;
+    }
     Ok(())
+}
+
+/// Les deux supports de siège du fauteuil (le premier de chaque côté).
+fn supports(b: &Build) -> [usize; 2] {
+    let mut out = [0; 2];
+    let mut k = 0;
+    for (i, p) in b.poles.iter().enumerate() {
+        if p.role == "support de siège" && k < 2 {
+            out[k] = i;
+            k += 1;
+        }
+    }
+    out
 }
 
 fn bancdos(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {

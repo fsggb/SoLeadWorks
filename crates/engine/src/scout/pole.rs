@@ -781,7 +781,7 @@ pub fn faisabilite(poles: &[Pole]) -> Vec<String> {
     let mut out = Vec::new();
     for p in poles {
         // chaque trou : sa position le long de la pièce et son rayon
-        let mut trous: Vec<(f64, f64, &'static str)> = Vec::new();
+        let mut trous: Vec<(f64, f64, &'static str, Option<[f64; 2]>)> = Vec::new();
         for op in &p.ops {
             let (c, u, d, nom) = match op {
                 Op::Mortise { c, u, d, w, style, .. } => (*c, *u, if style.round() { *d } else { d.max(*w) }, "mortaise"),
@@ -794,7 +794,8 @@ pub fn faisabilite(poles: &[Pole]) -> Vec<String> {
             }
             let t = -(c[0] * u[0] + c[1] * u[1]) / q;
             let z = c[2] + u[2] * t;
-            trous.push((z, d / 2.0, nom));
+            let n = q.sqrt();
+            trous.push((z, d / 2.0, nom, Some([u[0] / n, u[1] / n])));
             if nom == "mortaise" && p.width == 0.0 && d > p.diameter / 3.0 + JEU + 0.5 {
                 out.push(format!("« {} » : mortaise de {} mm, plus que le tiers de la pièce (Ø {})", p.role, d.round(), p.diameter.round()));
             }
@@ -814,14 +815,13 @@ pub fn faisabilite(poles: &[Pole]) -> Vec<String> {
                 if a.2 == "trou de cheville" && b.2 == "trou de cheville" {
                     continue;
                 }
-                if (a.0 - b.0).abs() < a.1 + b.1 + 5.0 {
-                    out.push(format!(
-                        "« {} » : une {} et une {} se croisent (décalez-les d'au moins {} mm)",
-                        p.role,
-                        a.2,
-                        b.2,
-                        (a.1 + b.1 + 5.0).round()
-                    ));
+                // Michel Froissart : deux trous perpendiculaires proches « coupent presque toutes les fibres »
+                // (5 cm au moins entre eux dans son fauteuil) ; deux trous parallèles : leurs rayons et un
+                // peu de bois
+                let perp = matches!((a.3, b.3), (Some(u), Some(w)) if (u[0] * w[0] + u[1] * w[1]).abs() < 0.5);
+                let mini = if perp { (a.1 + b.1 + 5.0).max(50.0) } else { a.1 + b.1 + 5.0 };
+                if (a.0 - b.0).abs() < mini - 0.5 {
+                    out.push(format!("« {} » : une {} et une {} trop proches (au moins {} mm entre elles)", p.role, a.2, b.2, mini.round()));
                 }
             }
         }
