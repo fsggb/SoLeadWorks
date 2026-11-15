@@ -846,7 +846,7 @@ fn assemblage(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "choisissez deux pièces différentes"));
     }
     let (oa, ob) = (a.clone(), b.clone());
-    let mut build = Build { poles: vec![a, b] };
+    let mut build = Build { poles: vec![a, b], ..Default::default() };
     let d = num(p, "d").unwrap_or(0.0);
     let result = match kind {
         "mibois" => build.mibois(0, 1, num(p, "pc").unwrap_or(50.0)).and_then(|()| {
@@ -1254,7 +1254,7 @@ fn plateau_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         dp: num(p, "dp").unwrap_or(10.0),
     };
     let (oa, ob) = (a.clone(), b.clone());
-    let mut build = Build { poles: vec![a, b] };
+    let mut build = Build { poles: vec![a, b], ..Default::default() };
     let n = tissage::plateau(&mut build, 0, 1, &o).map_err(|m| bad(cmd, m))?;
     update_pole(s, ia, &oa, &build.poles[0])?;
     update_pole(s, ib, &ob, &build.poles[1])?;

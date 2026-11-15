@@ -282,6 +282,9 @@ pub fn closest(p: V3, u: V3, q: V3, v: V3) -> Option<(V3, V3, f64, f64)> {
 #[derive(Default)]
 pub struct Build {
     pub poles: Vec<Pole>,
+    /// Les paires de pièces assemblées (tenon, mi-bois, cheville, brêlage…) : elles ont le droit de se
+    /// toucher et de s'interpénétrer à la jonction.
+    pub liens: Vec<(usize, usize)>,
 }
 
 /// What a tenon asks for.
@@ -301,7 +304,7 @@ pub struct TenonOpts {
 
 impl TenonOpts {
     pub fn new(style: Style) -> Self {
-        TenonOpts { style, through: false, d: 0.0, w: 0.0, theta: 15.0, typ: 1 }
+        TenonOpts { style, through: true, d: 0.0, w: 0.0, theta: 15.0, typ: 1 }
     }
     pub fn through(mut self) -> Self {
         self.through = true;
@@ -333,6 +336,7 @@ impl Build {
     /// Tenon of `t` into `r`: the end of `t` nearest `r` is trimmed to `r`'s surface and gets a
     /// tenon; `r` gets the mortise.
     pub fn tenon(&mut self, t: usize, r: usize, o: TenonOpts) -> Result<(), String> {
+        self.liens.push((t, r));
         let (pt, pr) = match (self.poles.get(t), self.poles.get(r)) {
             (Some(a), Some(b)) if t != r => (a.clone(), b.clone()),
             _ => return Err("choisissez deux pièces différentes".into()),
@@ -390,8 +394,10 @@ impl Build {
             return Err(format!("« {} » est trop mince, ou fendue, à cet endroit pour recevoir un tenon de « {} »", pr.role, pt.role));
         }
         let aronde = o.style == Style::Aronde;
-        let through = (o.through || (aronde && o.typ == 2)) && avail >= chord - 0.5;
-        let tlen = if through { chord + 6.0 } else { (0.6 * avail).min(avail - 4.0).max(12.0).round() };
+        // En froissartage le tenon traverse (mortaise ouverte) et dépasse un peu pour son coin : à travers
+        // toute la pièce, ou jusqu'à la face plate d'une pièce fendue.
+        let through = o.through || (aronde && o.typ == 2);
+        let tlen = if through { avail.min(chord) + 8.0 } else { (0.6 * avail).min(avail - 4.0).max(12.0).round() };
         // A dovetail flares towards its tip, but never beyond the pole it is cut in.
         let mut theta = if o.theta > 0.0 { o.theta } else { 20.0 };
         if aronde {
@@ -429,7 +435,7 @@ impl Build {
         }
         // The mortise: on `t`'s line, from just outside the surface of `r`.
         let base = sub(entry, mul(u_world, 3.0));
-        let depth = if through { chord + 10.0 } else { tlen + JEU + 3.0 };
+        let depth = if through { avail.min(chord) + 12.0 } else { tlen + JEU + 3.0 };
         let (c, u) = (self.poles[r].local(base), self.poles[r].local_dir(u_world));
         let (mw, md) = if o.style.round() { (d + JEU, d + JEU) } else { (w + JEU, d + JEU) };
         // A dovetail's groove runs the whole width of `r` along the slide direction.
@@ -440,6 +446,7 @@ impl Build {
 
     /// Half-lap of `a` and `b` (a takes `pc` % of the joint's thickness, from above; b the rest).
     pub fn mibois(&mut self, a: usize, b: usize, pc: f64) -> Result<(), String> {
+        self.liens.push((a, b));
         let (pa, pb) = match (self.poles.get(a), self.poles.get(b)) {
             (Some(x), Some(y)) if a != b => (x.clone(), y.clone()),
             _ => return Err("choisissez deux pièces différentes".into()),
@@ -503,6 +510,7 @@ impl Build {
     /// for crossing poles, else across `a`). Returns the peg's index.
     /// A mortise through `r` only along `t`'s line (a pole that passes through another).
     pub fn through(&mut self, t: usize, r: usize) -> Result<(), String> {
+        self.liens.push((t, r));
         let (pt, pr) = match (self.poles.get(t), self.poles.get(r)) {
             (Some(a), Some(b)) if t != r => (a.clone(), b.clone()),
             _ => return Err("choisissez deux pièces différentes".into()),
@@ -542,7 +550,9 @@ impl Build {
         let mut peg = Pole::bar("cheville", d, origin, add(origin, mul(k, total)));
         peg.up = default_up(peg.dir);
         self.poles.push(peg);
-        Ok(self.poles.len() - 1)
+        let k = self.poles.len() - 1;
+        self.liens.extend([(a, b), (k, a), (k, b)]);
+        Ok(k)
     }
 
     pub fn peg(&mut self, a: usize, b: usize, d: f64) -> Result<usize, String> {
@@ -569,6 +579,7 @@ impl Build {
         let (ca, cb, _, _) =
             closest(pa.origin, pa.dir, pb.origin, pb.dir).ok_or("les deux pièces sont parallèles : un brêlage demande qu'elles se croisent")?;
         let h = (turns * rope).clamp(rope, 200.0);
+        self.liens.push((a, b));
         for (p, c) in [(&pa, ca), (&pb, cb)] {
             let o = sub(c, mul(p.dir, h / 2.0));
             let mut ring = Pole::bar("brêlage", p.radius() * 2.0 + 2.0 * rope, o, add(o, mul(p.dir, h)));
@@ -761,4 +772,119 @@ mod tests {
         assert!(text.len() < 3000, "{}", text.len());
         assert_eq!(serde_json::from_str::<Pole>(&text).ok(), Some(p));
     }
+}
+
+/// Ce qui rend un meuble irréalisable en froissartage, pièce par pièce (manuel EEDF) : deux trous
+/// qui se croisent dans une même pièce, une mortaise plus large que le tiers de la pièce percée,
+/// ou percée trop près du bout (le bois fend).
+pub fn faisabilite(poles: &[Pole]) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in poles {
+        // chaque trou : sa position le long de la pièce et son rayon
+        let mut trous: Vec<(f64, f64, &'static str)> = Vec::new();
+        for op in &p.ops {
+            let (c, u, d, nom) = match op {
+                Op::Mortise { c, u, d, w, style, .. } => (*c, *u, if style.round() { *d } else { d.max(*w) }, "mortaise"),
+                Op::Hole { c, u, d, .. } => (*c, *u, *d, "trou de cheville"),
+                _ => continue,
+            };
+            let q = u[0] * u[0] + u[1] * u[1];
+            if q < 0.25 {
+                continue; // un trou dans le sens du fil (bout à bout) n'est pas concerné
+            }
+            let t = -(c[0] * u[0] + c[1] * u[1]) / q;
+            let z = c[2] + u[2] * t;
+            trous.push((z, d / 2.0, nom));
+            if nom == "mortaise" && p.width == 0.0 && d > p.diameter / 3.0 + JEU + 0.5 {
+                out.push(format!("« {} » : mortaise de {} mm, plus que le tiers de la pièce (Ø {})", p.role, d.round(), p.diameter.round()));
+            }
+            let (z0, z1) = (p.start, p.start + p.length);
+            if nom == "mortaise" && (z - z0).min(z1 - z).min(f64::MAX) < 1.5 * d {
+                out.push(format!(
+                    "« {} » : mortaise à {} mm du bout, le bois fendra (au moins {} mm)",
+                    p.role,
+                    (z - z0).min(z1 - z).round(),
+                    (1.5 * d).round()
+                ));
+            }
+        }
+        for i in 0..trous.len() {
+            for j in i + 1..trous.len() {
+                let (a, b) = (trous[i], trous[j]);
+                if a.2 == "trou de cheville" && b.2 == "trou de cheville" {
+                    continue;
+                }
+                if (a.0 - b.0).abs() < a.1 + b.1 + 5.0 {
+                    out.push(format!(
+                        "« {} » : une {} et une {} se croisent (décalez-les d'au moins {} mm)",
+                        p.role,
+                        a.2,
+                        b.2,
+                        (a.1 + b.1 + 5.0).round()
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Deux pièces qui occupent le même volume sans être assemblées : irréalisable (une claie qui passe à
+/// travers un pied, deux traverses l'une dans l'autre). Une pièce posée dans une entaille (quart de
+/// bois, mi-bois) est admise.
+pub fn collisions(b: &Build) -> Vec<String> {
+    let mut out = Vec::new();
+    let lie = |i: usize, j: usize| b.liens.iter().any(|&(x, y)| (x == i && y == j) || (x == j && y == i));
+    let n = b.poles.len().min(600);
+    for i in 0..n {
+        for j in i + 1..n {
+            let (p, q) = (&b.poles[i], &b.poles[j]);
+            if lie(i, j) || p.diameter < 8.0 || q.diameter < 8.0 || p.role == "brêlage" || q.role == "brêlage" {
+                continue;
+            }
+            // les deux segments visibles, au plus près
+            let (a0, a1, b0, b1) = (p.p_start(), p.end(), q.p_start(), q.end());
+            let (d, ta, tb) = seg_dist(a0, a1, b0, b1);
+            let (rp, rq) = (
+                p.diameter.min(if p.width > 0.0 { p.width } else { p.diameter }) / 2.0,
+                q.diameter.min(if q.width > 0.0 { q.width } else { q.diameter }) / 2.0,
+            );
+            if d >= rp + rq - 3.0 {
+                continue;
+            }
+            // une entaille de l'une ou de l'autre à cet endroit
+            let pa = add(a0, mul(sub(a1, a0), ta));
+            let pb = add(b0, mul(sub(b1, b0), tb));
+            let dans = |pole: &Pole, pt: V3| {
+                let l = pole.local(pt);
+                pole.ops.iter().any(|o| match o {
+                    Op::Notch { c, h } => (0..3).all(|k| (l[k] - c[k]).abs() <= h[k] + rp.max(rq)),
+                    Op::Split { .. } => true,
+                    _ => false,
+                })
+            };
+            if dans(p, pa) || dans(q, pb) || dans(p, pb) || dans(q, pa) {
+                continue;
+            }
+            out.push(format!("« {} » et « {} » se traversent sans assemblage", p.role, q.role));
+        }
+    }
+    out
+}
+
+/// Distance entre deux segments, et où (fractions 0..1 sur chacun).
+fn seg_dist(p0: V3, p1: V3, q0: V3, q1: V3) -> (f64, f64, f64) {
+    let (u, v, w) = (sub(p1, p0), sub(q1, q0), sub(p0, q0));
+    let (a, b, c, d, e) = (dot(u, u), dot(u, v), dot(v, v), dot(u, w), dot(v, w));
+    let den = a * c - b * b;
+    let mut s = if den > 1e-9 { ((b * e - c * d) / den).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = if c > 1e-9 { ((b * s + e) / c).clamp(0.0, 1.0) } else { 0.0 };
+    if a > 1e-9 {
+        s = ((b * t - d) / a).clamp(0.0, 1.0);
+    }
+    if c > 1e-9 {
+        t = ((b * s + e) / c).clamp(0.0, 1.0);
+    }
+    let dv = sub(add(p0, mul(u, s)), add(q0, mul(v, t)));
+    (len(dv), s, t)
 }

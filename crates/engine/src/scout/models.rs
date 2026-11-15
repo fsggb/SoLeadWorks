@@ -116,7 +116,7 @@ pub const MODELS: &[Model] = &[
             num("Ht", "Hauteur du dossier (mm)", 900.0),
             num("ang", "Inclinaison des diagonales depuis la verticale (°)", 25.0),
             num("angJ", "Inclinaison des jambes arrière (°)", 15.0),
-            num("dD", "Diamètre des diagonales (mm)", 70.0),
+            num("dD", "Diamètre des diagonales (mm, au plus le tiers du rondin d’assise)", 55.0),
             num("dS", "Diamètre du rondin d’assise (mm)", 180.0),
             num("dd", "Diamètre du rondin du dossier (mm, fendu en deux)", 140.0),
         ],
@@ -284,6 +284,11 @@ pub fn check(m: &Model, p: &Params) -> Result<(), String> {
 
 /// The poles of a model.
 pub fn build(id: &str, p: &Params) -> Result<Vec<Pole>, String> {
+    build_complet(id, p).map(|b| b.poles)
+}
+
+/// [`build`], avec les assemblages faits entre les pièces (pour vérifier le meuble).
+pub fn build_complet(id: &str, p: &Params) -> Result<Build, String> {
     let m = model(id).ok_or_else(|| format!("meuble inconnu « {id} » (scout.meuble.types les liste)"))?;
     check(m, p)?;
     let mut b = Build::default();
@@ -305,7 +310,7 @@ pub fn build(id: &str, p: &Params) -> Result<Vec<Pole>, String> {
     if b.poles.len() > MAX_POLES {
         return Err(format!("{} pièces : plus que les {MAX_POLES} permises", b.poles.len()));
     }
-    Ok(b.poles)
+    Ok(b)
 }
 
 fn v(x: f64, y: f64, z: f64) -> V3 {
@@ -342,12 +347,29 @@ fn frame(
     dt: f64,
 ) -> Result<Frame, String> {
     let r = dl / 2.0;
+    // un poteau qui continue au-dessus du cadre ne peut pas être traversé par une perche entière (le
+    // trou dépasserait le tiers du poteau) : les lisses et traverses y entrent alors par des tenons
+    let poteau = legs.iter().any(|&g| b.poles.get(g).is_some_and(|p| p.end()[2] > z + 1.0));
+    let asm = if poteau { Asm::Tenons } else { asm };
     match asm {
         Asm::Tenons => {
             let l0 = b.bar("lisse", dl, v(x0, y0, z), v(x1, y0, z));
             let l1 = b.bar("lisse", dl, v(x0, y1, z), v(x1, y1, z));
-            // the traverses sit lower so that their tenons meet the legs beside the lisses' tenons
-            let zt = z - dl * 0.6;
+            // deux mortaises dans un même pied ne doivent pas se croiser : les traverses sont plus bas
+            // que les lisses d'au moins la moitié des deux mortaises, plus 2 cm de bois entre elles
+            let dpied = legs.iter().filter_map(|&g| b.poles.get(g)).map(|p| p.diameter).fold(f64::MAX, f64::min);
+            let mort = |d: f64| (d * 0.55).min(dpied / 3.0).max(8.0).round() + 1.0;
+            let ecart = (mort(dl) + mort(dt)) / 2.0 + 20.0;
+            let zt = z - ecart.max(dl * 0.6);
+            // et chaque pied dépasse au-dessus de la mortaise du haut, sinon le bout fend
+            for &g in &legs {
+                if let Some(p) = b.poles.get_mut(g) {
+                    let besoin = z + 1.5 * mort(dl) + 10.0;
+                    if p.dir[2] > 0.5 && p.end()[2] < besoin {
+                        p.length += (besoin - p.end()[2]) / p.dir[2];
+                    }
+                }
+            }
             let t0 = b.bar("traverse", dt, v(x0, y0, zt), v(x0, y1, zt));
             let t1 = b.bar("traverse", dt, v(x1, y0, zt), v(x1, y1, zt));
             b.tenon(l0, legs[0], ten)?;
@@ -419,9 +441,24 @@ fn legs4(b: &mut Build, d: f64, (x0, x1, y0, y1): (f64, f64, f64, f64), hs: [f64
 fn claies(b: &mut Build, (xa, xb): (f64, f64), (y0, y1): (f64, f64), z_top: f64, d: f64) {
     let n = (((xb - xa) / (d * 1.4)).floor().max(1.0)) as usize;
     let n = n.min(120);
+    // les poteaux qui montent plus haut que le plateau : une claie ne passe pas au travers, la place
+    // reste libre (on la coupe autour du poteau en vrai)
+    let zc = z_top + d / 2.0;
+    let poteaux: Vec<(f64, f64, f64)> = b
+        .poles
+        .iter()
+        .filter(|p| p.dir[2] > 0.5 && p.end()[2] > zc - d && p.p_start()[2] < zc)
+        .map(|p| {
+            let t = (zc - p.origin[2]) / p.dir[2];
+            (p.origin[0] + p.dir[0] * t, p.origin[1] + p.dir[1] * t, p.radius())
+        })
+        .collect();
     for i in 0..n {
         let x = xa + (xb - xa) * (i as f64 + 0.5) / n as f64;
-        b.bar("claie", d, v(x, y0, z_top + d / 2.0), v(x, y1, z_top + d / 2.0));
+        if poteaux.iter().any(|&(px, py, r)| (x - px).abs() < r + d / 2.0 + 2.0 && py > y0 - r && py < y1 + r) {
+            continue;
+        }
+        b.bar("claie", d, v(x, y0, zc), v(x, y1, zc));
     }
 }
 
@@ -468,8 +505,12 @@ fn banc(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     }
     let ecart = dl * 0.9 + 60.0;
     let haut = if flat { zc - 20.0 } else { zc };
-    for x in [l * 0.14, l * 0.86] {
+    // les deux pieds d'une paire entrent dans le rondin à une main l'un de l'autre : deux mortaises
+    // au même endroit se croiseraient
+    let dm = (dp * 0.55).min(dl / 3.0).round() + 1.0;
+    for x0 in [l * 0.14, l * 0.86] {
         for s in [-1.0, 1.0] {
+            let x = x0 + s * (dm / 2.0 + 15.0);
             let pied = v(x, yc + s * ecart, 0.0);
             let centre = v(x, yc, zc);
             let t = haut / zc;
@@ -489,7 +530,8 @@ fn etabli(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     let a = p.get("ang").to_radians();
     let dir = v(a.cos(), 0.0, a.sin());
     let r = dp / 2.0;
-    let yy = (dp + 14.0) / 2.0;
+    // la pédale passe entre les deux perches : elles sont écartées de son diamètre, plus un jeu
+    let yy = (dp + dped) / 2.0 + 6.0;
     let z0 = r.max(dped / 2.0);
     let base = |y: f64| v(0.0, y, z0);
     let at = |y: f64, s: f64| add(base(y), mul(dir, s));
@@ -526,7 +568,7 @@ fn fauteuil(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
         b.tenon(t, legs[2], ten)?;
         b.tenon(t, legs[3], ten)?;
     }
-    claies(b, (0.0, w), (0.0, d), zr + 20.0 - 10.0, 25.0);
+    claies(b, (0.0, w), (0.0, d), zr + 20.0, 25.0);
     Ok(())
 }
 
@@ -541,7 +583,9 @@ fn bancdos(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     let mut rear = [0; 2];
     for (i, x) in [x0, x1].iter().enumerate() {
         front[i] = b.bar("pied", dp, v(*x, 0.0, 0.0), v(*x, 0.0, hs));
-        rear[i] = b.bar("montant arrière", dp, v(*x, rear_y(0.0), 0.0), v(*x, rear_y(ht), ht));
+        // le montant monte jusqu'à l'axe du rondin de dossier, où son tenon le traverse
+        let zb = ht - p.get("dd") / 2.0;
+        rear[i] = b.bar("montant arrière", dp, v(*x, rear_y(0.0), 0.0), v(*x, rear_y(zb), zb));
     }
     // a rail on each side under the seat, from the front leg to the rear post
     let zr = hs - ds / 2.0 - dp / 2.0;
@@ -560,18 +604,29 @@ fn bancdos(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     }
     // the back: a split log between the posts, flat face to the front
     let zb = ht - dd / 2.0;
-    let mut back = Pole::bar("rondin de dossier", dd, v(x0, rear_y(zb), zb), v(x1, rear_y(zb), zb));
+    // le rondin de dossier dépasse des montants (une mortaise au ras du bout fendrait le bois) ; le haut
+    // de chaque montant y entre par un tenon traversant
+    let deb = 2.0 * dp;
+    let mut back = Pole::bar("rondin de dossier", dd, v(x0 - deb, rear_y(zb), zb), v(x1 + deb, rear_y(zb), zb));
     back.up = v(0.0, -1.0, 0.0);
     b.poles.push(back);
     let bk = b.poles.len() - 1;
     b.split(bk, SplitMode::Demi)?;
-    b.through(rear[0], bk).ok();
+    for r in rear {
+        b.tenon(r, bk, ten)?;
+    }
     Ok(())
 }
 
 fn bancdiag(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     let (l, hs, ht) = (p.get("L"), p.get("hs"), p.get("Ht"));
     let (dd_, ds, dd) = (p.get("dD"), p.get("dS"), p.get("dd"));
+    if dd_ + 1.0 > ds / 3.0 + 1.5 {
+        return Err(format!(
+            "les diagonales traversent le rondin d'assise : leur diamètre ({dd_} mm) ne doit pas dépasser le tiers du rondin ({} mm)",
+            (ds / 3.0).floor()
+        ));
+    }
     let tan = p.get("ang").to_radians().tan();
     let tanj = p.get("angJ").to_radians().tan();
     let zlog = hs - ds / 2.0;
@@ -579,7 +634,8 @@ fn bancdiag(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
     let xs = [l * 0.1, l * 0.9];
     let log = b.bar("rondin d'assise", ds, v(0.0, ylog, zlog), v(l, ylog, zlog));
     b.split(log, SplitMode::Demi)?;
-    let mut back = Pole::bar("rondin de dossier", dd, v(xs[0], ht * tan, ht - dd / 2.0), v(xs[1], ht * tan, ht - dd / 2.0));
+    let deb = 2.0 * dd_;
+    let mut back = Pole::bar("rondin de dossier", dd, v(xs[0] - deb, ht * tan, ht - dd / 2.0), v(xs[1] + deb, ht * tan, ht - dd / 2.0));
     back.up = v(0.0, -1.0, 0.0);
     b.poles.push(back);
     let bk = b.poles.len() - 1;
@@ -590,7 +646,9 @@ fn bancdiag(b: &mut Build, p: &Params, ten: TenonOpts) -> Result<(), String> {
         b.through(dg, log)?;
         b.tenon(dg, bk, ten)?;
         // the rear leg, tenoned into the log
-        let leg = b.bar("jambe arrière", dd_ * 0.9, v(x, ylog + zlog * tanj, 0.0), v(x, ylog, zlog));
+        // à côté de la diagonale, assez loin pour que les deux trous ne se croisent pas
+        let xj = if x < l / 2.0 { x + dd_ * 1.6 } else { x - dd_ * 1.6 };
+        let leg = b.bar("jambe arrière", dd_ * 0.9, v(xj, ylog + zlog * tanj, 0.0), v(xj, ylog, zlog));
         b.tenon(leg, log, ten)?;
     }
     Ok(())
@@ -680,7 +738,8 @@ fn prepa(b: &mut Build, p: &Params, ten: TenonOpts, with_column: bool) -> Result
         let c0 = b.bar("montant", dl, v(if right_tall { xb } else { xa }, bx.2, 0.0), v(if right_tall { xb } else { xa }, bx.2, tall));
         let c1 = b.bar("montant", dl, v(if right_tall { xb } else { xa }, bx.3, 0.0), v(if right_tall { xb } else { xa }, bx.3, tall));
         let shared = if right_tall { [legs[1], legs[3]] } else { [legs[0], legs[2]] };
-        for z in [tall / 3.0, 2.0 * tall / 3.0, tall - dlis / 2.0] {
+        // l'étagère du haut reste à 1,5 mortaise du bout des montants (sinon le bois fend)
+        for z in [tall / 3.0, 2.0 * tall / 3.0, tall - dlis / 2.0 - 40.0] {
             for (a, c, y) in [(shared[0], c0, bx.2), (shared[1], c1, bx.3)] {
                 let _ = (a, c);
                 let rail = b.bar("lisse d'étagère", dlis, v(xa, y, z), v(xb, y, z));
@@ -760,6 +819,22 @@ fn _unused(_: End, _: V3) -> V3 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chaque_meuble_est_realisable_en_froissartage() {
+        let mut tout = Vec::new();
+        for m in MODELS {
+            let p = Params::of(m);
+            match build_complet(m.id, &p) {
+                Ok(b) => {
+                    tout.extend(super::super::pole::faisabilite(&b.poles).into_iter().map(|e| format!("{} : {e}", m.id)));
+                    tout.extend(super::super::pole::collisions(&b).into_iter().map(|e| format!("{} : {e}", m.id)));
+                }
+                Err(e) => tout.push(format!("{} : ne se construit pas : {e}", m.id)),
+            }
+        }
+        assert!(tout.is_empty(), "{} défauts :\n{}", tout.len(), tout.join("\n"));
+    }
+
     use super::*;
     use crate::scout::pole::{cut_list, extent, wood_metres};
 

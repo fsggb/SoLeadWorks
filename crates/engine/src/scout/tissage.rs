@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn un_plateau_de_claies_se_pose_dans_des_quarts_de_bois() {
-        let mut b = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)] };
+        let mut b = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)], ..Default::default() };
         let n = plateau(&mut b, 0, 1, &Plateau::default()).expect("plateau");
         assert_eq!(n, 50, "1000 mm de claies jointives de 20 mm");
         assert!(matches!(b.poles[0].ops.last(), Some(Op::Notch { .. })) && matches!(b.poles[1].ops.last(), Some(Op::Notch { .. })));
@@ -430,15 +430,16 @@ mod tests {
 
     #[test]
     fn des_planches_chevillees_dans_chaque_support() {
-        let mut b = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)] };
+        let mut b = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)], ..Default::default() };
         let o = Plateau { garniture: Garniture::Planches, jeu: 3.0, ..Plateau::default() };
         let n = plateau(&mut b, 0, 1, &o).expect("planches");
         assert_eq!(n, 9, "1000 mm de planches de 100 mm avec 3 mm de jeu");
         assert_eq!(b.poles.len(), 2 + n * 3, "chaque planche et ses deux chevilles");
         assert!(b.poles[0].ops.iter().filter(|o| matches!(o, Op::Hole { .. })).count() == n, "un trou par planche dans le support");
-        let mut c = Build { poles: vec![traverse(0.0, 500.0), Pole::bar("p", 60.0, [0.0, 300.0, 500.0], [0.0, 300.0, 1500.0])] };
+        let mut c =
+            Build { poles: vec![traverse(0.0, 500.0), Pole::bar("p", 60.0, [0.0, 300.0, 500.0], [0.0, 300.0, 1500.0])], ..Default::default() };
         assert!(plateau(&mut c, 0, 1, &o).is_err(), "supports non parallèles");
-        let mut d = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)] };
+        let mut d = Build { poles: vec![traverse(0.0, 500.0), traverse(600.0, 500.0)], ..Default::default() };
         assert!(plateau(&mut d, 0, 1, &Plateau { d: f64::NAN, ..Plateau::default() }).is_err());
     }
 }
