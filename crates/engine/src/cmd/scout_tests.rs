@@ -397,3 +397,14 @@ fn les_plateaux_dans_des_quarts_de_bois_et_les_planches_chevillees() {
         assert!(r["poles"].as_u64().unwrap_or(0) > 10, "table mode {mode} : {r}");
     }
 }
+
+#[test]
+fn un_meuble_cree_est_en_bois_et_ses_perches_rondes() {
+    let mut s = Session::default();
+    run(&mut s, "scout.meuble.create", json!({"type": "banc"}));
+    let perches: Vec<String> = s.doc.components.iter().filter(|c| c.properties.contains_key("scout_pole")).map(|c| c.name.clone()).collect();
+    assert!(perches.len() >= 5, "{perches:?}");
+    for p in &perches {
+        assert!(s.doc.appearances.bodies.contains_key(p), "« {p} » n'est pas en bois");
+    }
+}

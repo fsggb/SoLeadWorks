@@ -1607,6 +1607,7 @@ impl Body {
         }
         m.seams = crate::topo::seam_flags(self, &m);
         (m.smooth_edges, m.sharp_edges) = crate::smooth_edges::flags(self, &m);
+        facettes(&mut m);
         Ok(m)
     }
 
@@ -1948,3 +1949,60 @@ mod display_mesh_tests;
 #[cfg(test)]
 #[path = "regularization_protection_tests.rs"]
 mod regularization_protection_tests;
+
+/// Une arête entre deux faces planes presque alignées (moins de 20°) n'est pas tracée : un rond
+/// à facettes (une perche à 24 pans) se montre rond, sans les traits de ses pans.
+fn facettes(m: &mut Mesh) {
+    const MAX: usize = 2_000_000;
+    if m.triangles.len() > MAX || m.tri_face.len() != m.triangles.len() || m.edges.len() > MAX {
+        return;
+    }
+    let faces = m.tri_face.iter().copied().max().map_or(0, |f| f as usize + 1);
+    if faces > MAX {
+        return;
+    }
+    let mut normal: Vec<Option<Vec3>> = vec![None; faces];
+    let mut plane = vec![true; faces];
+    for (t, &f) in m.triangles.iter().zip(&m.tri_face) {
+        let p = |i: usize| -> Option<Vec3> {
+            let v = *t.get(i)? as usize;
+            m.positions.get(v)
+        };
+        let (Some(a), Some(b), Some(c)) = (p(0), p(1), p(2)) else { continue };
+        let Some(n) = (b - a).cross(c - a).normalized() else { continue };
+        let f = f as usize;
+        match normal.get(f).flatten() {
+            None => {
+                if let Some(slot) = normal.get_mut(f) {
+                    *slot = Some(n);
+                }
+            }
+            Some(first) if first.dot(n) < 1.0 - 1e-6 => {
+                if let Some(flag) = plane.get_mut(f) {
+                    *flag = false;
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let cos = 20f64.to_radians().cos();
+    if m.smooth_edges.len() != m.edges.len() {
+        m.smooth_edges.resize(m.edges.len(), false);
+    }
+    for i in 0..m.edges.len() {
+        if m.sharp_edges.get(i).unwrap_or(false) {
+            continue;
+        }
+        let Some([a, b]) = m.edge_faces.get(i).map(Vec::as_slice) else { continue };
+        let (a, b) = (*a as usize, *b as usize);
+        if a == b || !plane.get(a).unwrap_or(false) || !plane.get(b).unwrap_or(false) {
+            continue;
+        }
+        if let (Some(Some(na)), Some(Some(nb))) = (normal.get(a), normal.get(b))
+            && na.dot(nb) >= cos
+            && let Some(flag) = m.smooth_edges.get_mut(i)
+        {
+            *flag = true;
+        }
+    }
+}

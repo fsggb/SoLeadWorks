@@ -558,7 +558,8 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             item.children.push(cmd(app, "appearance.assign", "Remove override").with(targets));
         }
     }
-    if matches!(target, Target::Body { .. } | Target::Component { .. } | Target::Occurrence { .. }) {
+    let piece_dans_la_vue = matches!(target, Target::Viewport) && app.session.active_sketch.is_none() && !app.session.selection.is_empty();
+    if piece_dans_la_vue || matches!(target, Target::Body { .. } | Target::Component { .. } | Target::Occurrence { .. }) {
         v = court(v);
     }
     v
@@ -567,8 +568,11 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
 /// SoLeadWorks : le menu du clic droit sur une pièce reste court, « Déplacer » en tête ; le reste
 /// est dans le ruban.
 fn court(v: Vec<Item>) -> Vec<Item> {
-    const DEPLACER: [&str; 3] = ["ui.moveOccurrence", "ui.moveBodies", "solid.move"];
-    const GARDER: [&str; 15] = [
+    const DEPLACER: [&str; 4] = ["occurrence.move", "ui.moveOccurrence", "ui.moveBodies", "solid.move"];
+    const GARDER: [&str; 18] = [
+        "inspect.measure",
+        "ui.clear",
+        "ui.findBrowser",
         "ui.rename",
         "ui.copy",
         "ui.paste",

@@ -491,7 +491,11 @@ const BOIS: [u8; 3] = [214, 164, 104];
 /// Peint en bois le composant d'un meuble ou d'une pièce (ses perches en héritent). Une teinte refusée
 /// ne doit pas empêcher de construire le meuble : l'erreur est ignorée.
 fn en_bois(s: &mut Session, comp: u64) {
-    let _ = run(s, "appearance.assign", json!({"components": [comp.to_string()], "color": BOIS}));
+    // les corps des perches portent le nom de leur composant (enfants directs du meuble)
+    let corps: Vec<String> = s.doc.components.iter().filter(|c| c.parent == comp).map(|c| c.name.clone()).collect();
+    if corps.is_empty() || run(s, "appearance.assign", json!({"bodies": corps, "color": BOIS})).is_err() {
+        let _ = run(s, "appearance.assign", json!({"components": [comp.to_string()], "color": BOIS}));
+    }
 }
 
 /// Makes the component of one pole under `parent`, builds and places it, saves its record.
