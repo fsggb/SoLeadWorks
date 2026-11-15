@@ -268,9 +268,42 @@ fn world_dir(s: &Session, v: V3) -> V3 {
     [q.x, q.y, q.z]
 }
 
+/// Les perches et leurs outils ronds sont des prismes à `PANS` pans : les booléens entre faces planes
+/// sont trente fois plus rapides que sur des cylindres exacts (un banc se construit en une seconde au
+/// lieu d'une minute dans le navigateur), et l'œil ne voit pas la différence à cette échelle.
+const PANS: usize = 24;
+
 fn tool_cylinder(s: &mut Session, tool: &str, base: V3, axis: V3, d: f64, h: f64) -> Result<()> {
-    let (base, axis) = (world_point(s, base), world_dir(s, axis));
-    run(s, "solid.cylinder", json!({"base": base, "axis": axis, "diameter": d, "height": h, "body_name": tool}))?;
+    rond(s, tool, base, axis, d, h)
+}
+
+/// Un prisme rond (`PANS` pans) de diamètre `d`, de `base` sur `h` le long de `axis` (repère de la perche).
+fn rond(s: &mut Session, body: &str, base: V3, axis: V3, d: f64, h: f64) -> Result<()> {
+    let la = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if !(la > 1e-9) || !(d > 0.0) || !(h > 0.0) || !base.iter().all(|v| v.is_finite()) {
+        return Err(e(format!("{body} : un rond demande un axe, un diamètre et une longueur positifs")));
+    }
+    let a = [axis[0] / la, axis[1] / la, axis[2] / la];
+    let rf = if a[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+    let x = pole::cross(rf, a);
+    let lx = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+    let x = [x[0] / lx, x[1] / lx, x[2] / lx];
+    let y = pole::cross(a, x);
+    let (o, xw, yw) = (world_point(s, base), world_dir(s, x), world_dir(s, y));
+    let r = d / 2.0;
+    let mut pts: Vec<[f64; 2]> = (0..PANS)
+        .map(|i| {
+            let t = std::f64::consts::TAU * (i as f64 + 0.5) / PANS as f64;
+            [r * t.cos(), r * t.sin()]
+        })
+        .collect();
+    if let Some(p0) = pts.first().copied() {
+        pts.push(p0);
+    }
+    run(s, "sketch.create", json!({"plane": {"origin": o, "x_dir": xw, "y_dir": yw}}))?;
+    run(s, "sketch.line", json!({"points": pts}))?;
+    run(s, "sketch.finish", json!({}))?;
+    run(s, "solid.extrude", json!({"distance": h, "body_name": body}))?;
     Ok(())
 }
 
@@ -463,6 +496,14 @@ fn en_bois(s: &mut Session, comp: u64) {
 
 /// Makes the component of one pole under `parent`, builds and places it, saves its record.
 fn make_pole(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &Pole) -> Result<(u64, u64)> {
+    make_pole_avec(s, parent, kind, name, pole, &[])
+}
+
+/// [`make_pole`], les autres perches du meuble connues : chaque bout coupé à la forme d'une autre
+/// perche (`#n`) l'est tout de suite, par la forme brute de cette perche (un cylindre, ou le plan de
+/// sa face fendue) et avant les tenons. Couper par le corps fini de l'autre perche, déjà percé de
+/// ses mortaises, coûtait plusieurs secondes par pied.
+fn make_pole_avec(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &Pole, autres: &[Pole]) -> Result<(u64, u64)> {
     let c = run(s, "component.create", json!({"name": name, "parent": parent, "grounded": false}))?;
     let (comp, occ) = (id_of(&c, "component"), id_of(&c, "occurrence"));
     let (z0, z1) = pole.built_range();
@@ -473,11 +514,14 @@ fn make_pole(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &Pole) 
             json!({"corner": [-pole.diameter / 2.0, -pole.width / 2.0, z0], "length": pole.diameter, "width": pole.width, "height": z1 - z0, "body_name": name}),
         )?;
     } else {
-        run(
-            s,
-            "solid.cylinder",
-            json!({"base": [0.0, 0.0, z0], "axis": [0.0, 0.0, 1.0], "diameter": pole.diameter, "height": z1 - z0, "body_name": name}),
-        )?;
+        rond(s, name, [0.0, 0.0, z0], [0.0, 0.0, 1.0], pole.diameter, z1 - z0)?;
+    }
+    for op in &pole.ops {
+        if let Op::Saddle { with, end, .. } = op
+            && let Some(cible) = with.strip_prefix('#').and_then(|n| n.parse::<usize>().ok()).and_then(|j| autres.get(j))
+        {
+            gueule_de_loup(s, name, pole, *end, cible)?;
+        }
     }
     for op in pole.ops.iter().filter(|o| !matches!(o, Op::Saddle { .. })) {
         apply_op(s, name, pole, op)?;
@@ -490,7 +534,62 @@ fn make_pole(s: &mut Session, parent: u64, kind: &str, name: &str, pole: &Pole) 
 
 /// Once every pole of a part exists: each end cut to fit another pole is cut to it (`#n` names the
 /// pole of index n), and the records are saved with the real names.
-fn fit_saddles(s: &mut Session, kind: &str, comps: &[(u64, String)], poles: &mut [Pole]) -> Result<()> {
+/// Le bout `end` de `pole` coupé à la forme brute de `cible` (repère de `pole`).
+fn gueule_de_loup(s: &mut Session, name: &str, pole: &Pole, end: End, cible: &Pole) -> Result<()> {
+    let r = cible.radius();
+    // la face plate d'une perche fendue, si la pièce arrive par ce côté-là
+    let fendu = cible.ops.iter().find_map(|o| if let Op::Split { mode } = o { Some(*mode) } else { None });
+    let loin = if end == End::End { pole.p_start() } else { pole.end() };
+    let lc = cible.local(loin);
+    let plan = match fendu {
+        Some(_) if lc[0] > 0.0 => Some(cible.x_axis()),
+        Some(SplitMode::Quart) if lc[1] > 0.0 => Some(cible.y_axis()),
+        _ => None,
+    };
+    let tool = tool_name(name);
+    match plan {
+        Some(n) => {
+            // tout ce qui passe derrière la face plate (côté bois gardé) part : un grand pavé dont une
+            // face est ce plan, dessiné dans le plan de la perche le plus proche de la normale
+            let nl = pole.local_dir(n);
+            let o = pole.local(cible.origin);
+            let a = (0..3).min_by(|&i, &j| nl[i].abs().total_cmp(&nl[j].abs())).unwrap_or(0);
+            let (u, v) = match a {
+                0 => (1, 2),
+                1 => (0, 2),
+                _ => (0, 1),
+            };
+            let big = (pole.length + pole.radius() + r) * 4.0 + 100.0;
+            // le long du plan (direction t), et vers l'arrière (−n)
+            let mut t = [0.0; 3];
+            t[u] = -nl[v];
+            t[v] = nl[u];
+            let tn = (t[u] * t[u] + t[v] * t[v]).sqrt();
+            if tn < 1e-9 {
+                return Ok(());
+            }
+            let t = [t[0] / tn, t[1] / tn, t[2] / tn];
+            let mut nn = [0.0; 3];
+            nn[u] = nl[u];
+            nn[v] = nl[v];
+            let nnl = (nn[u] * nn[u] + nn[v] * nn[v]).sqrt().max(1e-9);
+            let nn = [nn[0] / nnl, nn[1] / nnl, nn[2] / nnl];
+            let mut c = o;
+            c[a] = 0.0;
+            let at = |k: f64, m: f64| -> V3 { [c[0] + t[0] * k - nn[0] * m, c[1] + t[1] * k - nn[1] * m, c[2] + t[2] * k - nn[2] * m] };
+            let pts = vec![at(-big, 0.0), at(big, 0.0), at(big, big), at(-big, big)];
+            tool_prism(s, &tool, a, 0.0, &pts, big)?;
+        }
+        None => {
+            let (z0, z1) = cible.built_range();
+            let base = cible.local(pole::add(cible.origin, pole::mul(cible.dir, z0)));
+            tool_cylinder(s, &tool, base, pole.local_dir(cible.dir), 2.0 * r, z1 - z0)?;
+        }
+    }
+    combine(s, name, &tool, "cut")
+}
+
+fn fit_saddles(s: &mut Session, kind: &str, comps: &[(u64, String)], poles: &mut [Pole], couper: bool) -> Result<()> {
     for i in 0..poles.len() {
         let mut changed = false;
         for k in 0..poles[i].ops.len() {
@@ -498,8 +597,10 @@ fn fit_saddles(s: &mut Session, kind: &str, comps: &[(u64, String)], poles: &mut
             let Some(j) = with.strip_prefix('#').and_then(|n| n.parse::<usize>().ok()) else { continue };
             let Some((_, target)) = comps.get(j) else { continue };
             let Some((comp, name)) = comps.get(i) else { continue };
-            run(s, "component.activate", json!({"component": *comp}))?;
-            combine_keep(s, name, target, "cut")?;
+            if couper {
+                run(s, "component.activate", json!({"component": *comp}))?;
+                combine_keep(s, name, target, "cut")?;
+            }
             poles[i].ops[k] = Op::Saddle { with: target.clone(), end, extra };
             changed = true;
         }
@@ -586,10 +687,10 @@ fn create_meuble(s: &mut Session, p: &Value) -> Result<Value> {
         let n = counts.entry(pole.role.clone()).or_insert(0);
         *n += 1;
         let part = format!("{} {} {}", pole.role, n, name);
-        let (pc, _) = make_pole(s, comp, &kind, &part, pole)?;
+        let (pc, _) = make_pole_avec(s, comp, &kind, &part, pole, &poles)?;
         comps.push((pc, part));
     }
-    fit_saddles(s, &kind, &comps, &mut poles)?;
+    fit_saddles(s, &kind, &comps, &mut poles, false)?;
     en_bois(s, comp);
     let (x, y) = at.map_or((0.0, 0.0), |v| (v.x, v.y));
     run(
